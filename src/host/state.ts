@@ -10,6 +10,8 @@ export interface SegmentSummary {
   summary: string
   tokens: number
   refined: boolean
+  /** 'code'/'table' = 结构化摘要已足够，未调小模型精炼（省 token）。 */
+  skipReason?: 'code' | 'table'
   ts: number
 }
 

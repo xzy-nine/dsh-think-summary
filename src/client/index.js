@@ -55,6 +55,7 @@ const PANEL_CSS = `
 .ts-dock-prev[aria-expanded="true"] .ts-dock-prev-chevron{transform:rotate(90deg)}
 .ts-dock-prev-body{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}
 .ts-seg-refined{color:var(--dsw-alias-state-business-primary)}
+.ts-seg-skip{color:var(--dsw-alias-label-tertiary)}
 .ts-tail{margin:4px 16px 4px 30px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
 .ts-tail-head{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
 .ts-tail-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -89,6 +90,16 @@ const FIELD_GROUPS = [
     caption: '小模型精炼',
     fields: [
       { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后所有分段都会用最小模型精炼摘要' },
+      { key: 'refineSkipCode', label: '跳过代码段精炼', kind: 'bool', hint: '纯代码段不调小模型精炼（省 token），摘要显示"代码块 · N 行"' },
+      {
+        key: 'refineTrim', label: '精炼输入裁剪', kind: 'enum',
+        options: [
+          ['headtail', '头尾（保主题+结论，丢中段）'],
+          ['tail', '仅尾部（丢主题，中段完整）'],
+          ['full', '完整保留（不裁剪，信息最全）'],
+        ],
+        hint: '精炼输入预算内的裁剪策略；完整保留不裁剪但最耗 token',
+      },
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
       { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
     ],
@@ -106,6 +117,19 @@ function fmtTok(n) {
   if (n < 1000) return String(n)
   const k = (n / 1000).toFixed(1).replace(/\.0$/, '')
   return k + 'k'
+}
+
+/** 段状态：代码段/表格段 → 结构化摘要（未精炼）；已精炼 → 已精炼；否则无标签。 */
+function segStatus(s) {
+  if (s && s.skipReason === 'code') return { cls: 'ts-seg-skip', label: '代码段·未精炼' }
+  if (s && s.skipReason === 'table') return { cls: 'ts-seg-skip', label: '表格·未精炼' }
+  if (s && s.refined) return { cls: 'ts-seg-refined', label: '已精炼' }
+  return null
+}
+
+function segStatusEl(s) {
+  const st = segStatus(s)
+  return st ? React.createElement('span', { className: st.cls }, st.label) : null
 }
 
 /** 开关（视觉 switch，实际是带 aria 的 button）。 */
@@ -358,6 +382,21 @@ function makeSettingsCard(scope) {
             }),
             f.unit ? React.createElement('span', { style: { fontSize: 11, color: T.dim } }, f.unit) : null,
           )
+        } else if (f.kind === 'enum') {
+          control = React.createElement(
+            'select',
+            {
+              value: value || (f.options && f.options[0] ? f.options[0][0] : ''),
+              disabled: busy || snap.writable === false,
+              onChange: (e) => setField(f.key, e.target.value),
+              title: f.hint,
+              style: {
+                width: 210, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
+                background: 'transparent', color: T.text, fontSize: 12.5,
+              },
+            },
+            (f.options || []).map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
+          )
         } else {
           control = React.createElement('input', {
             type: 'text',
@@ -476,7 +515,7 @@ function makeThinkTail() {
         React.createElement(
           'div', { className: 'ts-tail-seg-head' },
           React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
-          s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
+          segStatusEl(s),
         ),
         React.createElement('div', { className: 'ts-tail-seg-text' }, s.summary),
       ),
@@ -559,7 +598,7 @@ function makeInputDock() {
           React.createElement(
             'div', { className: 'ts-dock-seg-head' },
             React.createElement('span', null, prefix + '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
-            s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
+            segStatusEl(s),
           ),
           React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
         ),

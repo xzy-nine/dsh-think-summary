@@ -2,7 +2,11 @@
  * M2 启发式总结提取器（0 token，design.md §4.3.1）：
  * 抽主题句/标题/结论句/要点行，并附文件路径与高频代码标识符（过滤停用词）。
  * 每段先截断再拼接，保证文件/符号后缀存活于 maxLen 内。
+ *
+ * docs/segment-optimization.md §4.C：代码块/表格段改用结构化摘要（0 token），
+ * 并默认跳过小模型精炼（省 token）。统一入口 summarizeSegment()。
  */
+import { SKIP_CODE_RATIO, type SegmentMeta } from '../mdline.js'
 
 const HEADING_RE = /^\s{0,3}#{1,6}\s+/
 const BULLET_RE = /^\s*[-*+]\s+/
@@ -60,4 +64,50 @@ export function heuristicSummary(text: string, maxLen = 160): string {
   if (paths.size > 0) out += ` | 文件: ${[...paths].slice(0, 3).join(', ')}`
   if (topIdents.length > 0) out += ` | 符号: ${topIdents.join(', ')}`
   return out.length > maxLen ? out.slice(0, maxLen) + '…' : out
+}
+
+/** 代码块摘要（0 token）：语言 + 行数 + 首行实质内容。 */
+export function codeBlockSummary(text: string, maxLen = 160): string {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+  const first = lines[0] || ''
+  const lang = /^\s{0,3}(?:```|~~~)\s*([\w+-]*)/.exec(first)?.[1] ?? ''
+  const codeLines = lines.filter((l) => !/^\s{0,3}(?:```|~~~)/.test(l))
+  const sample = codeLines.find((l) => l.length > 3) ?? ''
+  let out = '代码块 · ' + (lang ? lang + ' · ' : '') + '约 ' + codeLines.length + ' 行'
+  if (sample) out += ' | ' + sample.slice(0, Math.max(20, maxLen - out.length - 3)) + '…'
+  return out.length > maxLen ? out.slice(0, maxLen) + '…' : out
+}
+
+/** 表格摘要（0 token）：列头 + 行数。 */
+export function tableSummary(text: string, maxLen = 160): string {
+  const rows = text.split('\n').map((l) => l.trim()).filter((l) => l.includes('|'))
+  const head = rows[0] ?? ''
+  const cells = head.split('|').map((c) => c.trim()).filter(Boolean)
+  let out = '表格 · ' + rows.length + ' 行'
+  if (cells.length > 0) out += ' · 列: ' + cells.join('/')
+  return out.length > maxLen ? out.slice(0, maxLen) + '…' : out
+}
+
+export interface SegmentSummaryChoice {
+  summary: string
+  /** 'code'/'table' = 该段不调小模型精炼（结构化摘要已足够，省 token）。 */
+  skipReason?: 'code' | 'table'
+}
+
+/**
+ * 统一段摘要决策（0 token）：
+ *  - 表格段（非代码）→ 结构化摘要，跳过精炼
+ *  - 代码段（围栏字符占比 > SKIP_CODE_RATIO）→ 结构化摘要；skipCode=true 时跳过精炼
+ *  - 其余 → 启发式提取
+ */
+export function summarizeSegment(text: string, meta: SegmentMeta | undefined, skipCode: boolean): SegmentSummaryChoice {
+  const codeRatio = meta?.codeRatio ?? 0
+  const isTable = meta?.isTable === true
+  if (isTable && codeRatio <= SKIP_CODE_RATIO) return { summary: tableSummary(text), skipReason: 'table' }
+  if (codeRatio > SKIP_CODE_RATIO) {
+    return skipCode
+      ? { summary: codeBlockSummary(text), skipReason: 'code' }
+      : { summary: codeBlockSummary(text) }
+  }
+  return { summary: heuristicSummary(text) }
 }

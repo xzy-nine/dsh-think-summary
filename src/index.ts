@@ -25,6 +25,8 @@ const Config = z.object({
   refineMaxInputTokens: z.number().default(1500),
   refineOutputTokens: z.number().default(1024),
   refineModel: z.string().default('auto'),
+  refineSkipCode: z.boolean().default(true),
+  refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),
 })
 
 /**

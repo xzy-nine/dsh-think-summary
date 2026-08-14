@@ -8,7 +8,7 @@
  *  - 异常/中止：错误隔离回退启发式（保留原摘要）；按会话取消未完成任务
  *  - 固定短提示词模板，不随内容增长
  */
-import { estimateTokens } from '../detect.js'
+import { countRaw, estimateTokens } from '../detect.js'
 
 export interface RefineOptions {
   enabled?: boolean
@@ -21,6 +21,12 @@ export interface RefineOptions {
   outputTokens?: number
   /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
   model?: string
+  /**
+   * 输入裁剪策略：'headtail' 头尾裁剪（保头+尾、丢中段）；
+   * 'tail' 仅保尾部；'full' 完整保留（不裁剪）。头尾裁剪同预算信息量更高，
+   * 但中段细节可能丢失——留三档开关供用户权衡。
+   */
+  trim?: 'headtail' | 'tail' | 'full'
 }
 
 export interface RefineTask {
@@ -67,6 +73,33 @@ export function trimToTokens(text: string, budget: number): string {
   let s = text
   while (estimateTokens(s) > budget && s.length > 64) {
     s = s.slice(Math.ceil(s.length * 0.25))
+  }
+  return s
+}
+
+/**
+ * 头尾裁剪（docs/segment-optimization.md §4.C）：保留头部（主题，常在前 20%）
+ * 与尾部（结论），丢中段。比"只保尾部"在同等预算下信息量更高。
+ */
+export function headTailTrim(text: string, budget: number, headRatio = 0.3): string {
+  if (estimateTokens(text) <= budget) return text
+  const headBudget = Math.max(16, Math.floor(budget * headRatio))
+  const tailBudget = budget - headBudget
+  const head = takeTokens(text, headBudget, 1)
+  const tail = takeTokens(text, tailBudget, -1)
+  const mid = '…（中段略）…'
+  const out = head + mid + tail
+  return estimateTokens(out) <= budget ? out : head + tail
+}
+
+/** 从文本一端取约 budget token（按估算密度先取字符再收敛）。 */
+function takeTokens(text: string, budget: number, dir: 1 | -1): string {
+  const raw = countRaw(text)
+  const avg = (raw.cjk + raw.other / 4) / Math.max(1, text.length)
+  const targetChars = Math.max(1, Math.floor(budget / Math.max(0.05, avg)))
+  let s = dir === 1 ? text.slice(0, targetChars) : text.slice(Math.max(0, text.length - targetChars))
+  while (estimateTokens(s) > budget && s.length > 8) {
+    s = dir === 1 ? s.slice(0, Math.ceil(s.length * 0.9)) : s.slice(Math.floor(s.length * 0.1))
   }
   return s
 }
@@ -205,12 +238,28 @@ export class RefineQueue {
   ): Promise<string> {
     // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；
     // system 走顶层字段；该 provider 不支持 reasoningEffort（勿设置）。
+    const trimMode = this.getOptions().trim
     const stream = llm.stream({
       provider: task.provider,
       model,
       maxTokens: outputTokens,
       system: PROMPT_SYSTEM,
-      messages: [{ role: 'user', content: [{ type: 'text', text: trimToTokens(task.text, maxInputTokens) }] }],
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text:
+                trimMode === 'tail'
+                  ? trimToTokens(task.text, maxInputTokens)
+                  : trimMode === 'full'
+                    ? task.text
+                    : headTailTrim(task.text, maxInputTokens),
+            },
+          ],
+        },
+      ],
       signal,
     })
     let out = ''

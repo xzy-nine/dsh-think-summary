@@ -1,7 +1,7 @@
 import { ThinkingDetector } from './detect.js'
 import type { ThinkStateStore } from './state.js'
 import { Segmenter, hashText } from './segment.js'
-import { heuristicSummary } from './summarize/heuristic.js'
+import { summarizeSegment } from './summarize/heuristic.js'
 import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
 import type { CtxLike } from './ctx.js'
@@ -11,10 +11,11 @@ import type { CtxLike } from './ctx.js'
  *  - 只观察 thinking 增量（reasoning-delta），绝不改写/缓冲/阻塞 chunk 流
  *  - 每次 llm/stream 调用 = 一个 think（每次思考分组）
  *  - 检测器累计 token（原始计数），触发长思考阈值
- *  - 分段器按双阈值+语义边界/块切换信号切段；切段门控 = inSplice
- *    （阈值前的缓冲保留，首个切段包含阈值前文本，不再整体丢弃）
+ *  - 分段器按双阈值 + Markdown 结构边界/块切换信号切段（mdline.ts：
+ *    围栏内不切、代码块/表格原子、max 句末回溯）；切段门控 = inSplice
  *  - state 级哈希去重；finish/异常均 flush 并 end
- *  - M3：所有分段入精炼队列（fire-and-forget）；主流 error/abort 时按会话取消
+ *  - M3：可精炼分段入精炼队列（fire-and-forget）；代码段/表格段按配置跳过
+ *    （refineSkipCode，结构化摘要 0 token 兜底）；主流 error/abort 时按 think 取消
  *  - 配置经 getOptions 每次流开始时读取（设置页改动即时生效）
  */
 export function installDetect(
@@ -53,20 +54,23 @@ export function installDetect(
         segmentMaxTokens: opts.segmentMaxTokens,
         canCut: () => detector.inSplice,
       },
-      (text: string, tokens: number) => {
+      (text: string, tokens: number, meta) => {
         // 门控保证 cut 只发生在 inSplice 之后；state 级去重防重试/重放
         const h = hashText(text)
         if (state.hashes.has(h)) return
         state.hashes.add(h)
         const idx = think.segments.length
+        // 代码段/表格段：结构化摘要（0 token），按配置跳过精炼（省 token）
+        const choice = summarizeSegment(text, meta, opts.refineSkipCode !== false)
         store.pushSegment(state, think.id, {
           index: idx,
-          summary: heuristicSummary(text),
+          summary: choice.summary,
           tokens,
           refined: false,
+          skipReason: choice.skipReason,
           ts: Date.now(),
         })
-        if (refine) {
+        if (refine && !choice.skipReason) {
           refine.enqueue({
             sessionId: key,
             thinkId: think.id,

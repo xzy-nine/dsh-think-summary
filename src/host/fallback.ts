@@ -92,10 +92,14 @@ export function installFallback(
         const { think } = store.ensureThink(sid, thinkKey)
         // 实时路径已产出分段则跳过（该 think 已由实时路径置位 inSplice）
         if (state.inSplice && think.segments.length > 0) return
-        const outcomes = processThinking(entry.text, {
-          segmentMinTokens: opts.segmentMinTokens,
-          segmentMaxTokens: opts.segmentMaxTokens,
-        })
+        const outcomes = processThinking(
+          entry.text,
+          {
+            segmentMinTokens: opts.segmentMinTokens,
+            segmentMaxTokens: opts.segmentMaxTokens,
+          },
+          { skipCode: opts.refineSkipCode !== false },
+        )
         if (outcomes.length === 0) return
         const model = defaultModel?.() ?? { provider: '', model: '' }
         const base = think.segments.length
@@ -106,10 +110,11 @@ export function installFallback(
             summary: o.summary,
             tokens: o.tokens,
             refined: false,
+            skipReason: o.skipReason,
             ts: o.ts,
           })
-          // 兜底路径分段同样精炼（若默认模型可解析）
-          if (refine) {
+          // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过
+          if (refine && !o.skipReason) {
             refine.enqueue({
               sessionId: sid,
               thinkId: thinkKey,

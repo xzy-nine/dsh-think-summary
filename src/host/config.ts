@@ -22,9 +22,21 @@ export interface ThinkSummaryConfig {
   refineOutputTokens?: number
   /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
   refineModel?: string
+  /** 跳过代码段精炼（纯代码段用结构化摘要，省 token）。 */
+  refineSkipCode?: boolean
+  /**
+   * 精炼输入裁剪策略：
+   *  - 'headtail' 头尾裁剪（保留头部主题+尾部结论、丢中段，同预算信息量更高，但中段细节丢失）
+   *  - 'tail'     仅保尾部（中段细节完整，但主题/背景信息丢失）
+   *  - 'full'     完整保留（不裁剪，信息最全，最耗 token）
+   */
+  refineTrim?: 'headtail' | 'tail' | 'full'
 }
 
-export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { refineModel: string } = {
+export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim'>> & {
+  refineModel: string
+  refineTrim: 'headtail' | 'tail' | 'full'
+} = {
   enabled: true,
   thinkThresholdTokens: 2000,
   filterNonAgentLoop: true,
@@ -34,6 +46,8 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { ref
   refineMaxInputTokens: 1500,
   refineOutputTokens: 1024,
   refineModel: 'auto',
+  refineSkipCode: true,
+  refineTrim: 'headtail',
 }
 
 export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { refineModel: string } {
