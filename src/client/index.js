@@ -32,33 +32,43 @@ const T = {
   warn: '#ffd60a',
 }
 
-/** 侧边栏面板样式（注入一次 <style>）。 */
+/** 侧边栏面板样式（注入一次 <style>；与 shell 原生导航条目同款尺寸/token）。 */
 const PANEL_CSS = `
-.ts-block{margin:2px 8px 4px}
-.ts-entry{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:6px;background:transparent;border:none;color:${T.text};font:inherit;font-size:13px;cursor:pointer;text-align:left}
-.ts-entry:hover,.ts-entry[data-active="true"]{background:${T.hover}}
-.ts-entry svg{flex:none;color:${T.dim}}
-.ts-card{border:1px solid ${T.border};border-radius:6px;background:${T.bg};margin-top:2px;overflow:hidden}
+.ts-block{}
+.ts-entry{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 12px;background:transparent;border:none;border-radius:8px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;white-space:nowrap;text-align:left;transition:background-color 120ms ease,color 120ms ease}
+.ts-entry:hover{background:var(--dsw-specific-sidebar-nav-item-hover);color:var(--dsw-alias-label-primary)}
+.ts-entry[data-active="true"]{background:var(--dsw-specific-sidebar-nav-item-active);color:var(--dsw-alias-label-primary);font-weight:600}
+.ts-entry:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.ts-entry:active{transform:translateY(1px)}
+.ts-entryIcon{display:inline-flex;align-items:center;justify-content:center;flex:none}
+.ts-entryLabel{overflow:hidden;text-overflow:ellipsis}
+[data-dsh-frame][data-sidebar-collapsed] .ts-entry{justify-content:center;padding:0;width:100%}
+[data-dsh-frame][data-sidebar-collapsed] .ts-entryLabel{display:none}
+[data-dsh-frame][data-sidebar-collapsed] .ts-card{display:none}
+.ts-card{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);margin:2px 12px 6px;overflow:hidden}
 .ts-card[hidden]{display:none}
-.ts-head{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid ${T.border};font-size:12px;color:${T.text}}
-.ts-dot{width:7px;height:7px;border-radius:50%;flex:none}
-.ts-head-tok{color:${T.dim};font-variant-numeric:tabular-nums}
+.ts-head{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--dsw-alias-separator-primary);font-size:12px;color:var(--dsw-alias-label-primary)}
+.ts-dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--dsw-alias-state-success-primary)}
+.ts-dot[data-active="true"]{background:var(--dsw-alias-state-warn-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-warn-primary) 25%,transparent)}
+.ts-head-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.ts-head-refined{color:var(--dsw-alias-state-business-primary);font-size:11px}
 .ts-body{max-height:50vh;overflow:auto}
-.ts-think{border-bottom:1px solid ${T.border}}
+.ts-think{border-bottom:1px solid var(--dsw-alias-separator-primary)}
 .ts-think:last-child{border-bottom:none}
-.ts-think-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;background:transparent;border:none;color:${T.text};font:inherit;font-size:12px;cursor:pointer;text-align:left}
-.ts-think-head:hover{background:${T.hover}}
-.ts-think-chevron{transition:transform .12s;color:${T.dim}}
+.ts-think-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
+.ts-think-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-think-chevron{transition:transform .12s;color:var(--dsw-alias-label-tertiary)}
 .ts-think[data-open="true"] .ts-think-chevron{transform:rotate(180deg)}
 .ts-think-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ts-think-meta{flex:none;color:${T.dim};font-size:10.5px;white-space:nowrap}
-.ts-think-status{flex:none;font-size:10.5px;white-space:nowrap}
+.ts-think-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;white-space:nowrap}
+.ts-think-status{flex:none;font-size:10.5px;white-space:nowrap;color:var(--dsw-alias-label-tertiary)}
+.ts-think-status[data-active="true"]{color:var(--dsw-alias-state-warn-primary)}
 .ts-seg{display:flex;gap:8px;align-items:baseline;padding:3px 10px 3px 22px;font-size:12px}
-.ts-seg-num{flex:none;color:${T.dim};font-size:10.5px;min-width:16px;text-align:right}
-.ts-seg-sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${T.text}}
-.ts-seg-meta{flex:none;color:${T.dim};font-size:10.5px;white-space:nowrap}
-.ts-seg-refined{color:${T.accent}}
-.ts-placeholder{padding:6px 10px;font-size:12px;color:${T.dim}}
+.ts-seg-num{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;min-width:16px;text-align:right}
+.ts-seg-sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-primary)}
+.ts-seg-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;white-space:nowrap}
+.ts-seg-refined{color:var(--dsw-alias-state-business-primary)}
+.ts-placeholder{padding:6px 10px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 `
 
 /** 入口图标（16px 导航图标观感）。 */
@@ -417,7 +427,7 @@ function mountSidebarPanel() {
   entry.className = 'ts-entry'
   entry.dataset.dshThinksummaryEntry = ''
   entry.setAttribute('aria-label', '思考总结')
-  entry.innerHTML = ENTRY_ICON + '<span>思考总结</span>'
+  entry.innerHTML = '<span class="ts-entryIcon">' + ENTRY_ICON + '</span><span class="ts-entryLabel">思考总结</span>'
 
   const card = document.createElement('div')
   card.className = 'ts-card'
@@ -448,8 +458,7 @@ function mountSidebarPanel() {
     // 头部：状态 + 计数
     const head = el('div', 'ts-head')
     const dot = el('span', 'ts-dot')
-    dot.style.background = state.active ? T.warn : T.ok
-    if (state.active) dot.style.boxShadow = '0 0 0 3px ' + T.warn + '33'
+    if (state.active) dot.dataset.active = 'true'
     head.appendChild(dot)
     head.appendChild(el('span', null, state.active ? '思考中' : '思考结束'))
     head.appendChild(el('span', 'ts-head-tok', fmtTok(state.thinkingTokens) + ' tok'))
@@ -457,7 +466,7 @@ function mountSidebarPanel() {
     head.appendChild(el('span', 'ts-head-tok', totalSegs + ' 段'))
     const refinedCount = thinks.reduce((sum, t) => sum + t.segments.filter((s) => s.refined).length, 0)
     if (refinedCount > 0) {
-      head.appendChild(el('span', 'ts-seg-refined', refinedCount + ' 段已精炼'))
+      head.appendChild(el('span', 'ts-head-refined', refinedCount + ' 段已精炼'))
     }
     card.appendChild(head)
 
@@ -477,7 +486,7 @@ function mountSidebarPanel() {
       headBtn.appendChild(el('span', 'ts-think-chevron', '▾'))
       headBtn.appendChild(el('span', 'ts-think-title', '第 ' + (thinkIndex + 1) + ' 次思考'))
       const status = el('span', 'ts-think-status', t.active ? '● 思考中' : '完成')
-      status.style.color = t.active ? T.warn : T.dim
+      if (t.active) status.dataset.active = 'true'
       headBtn.appendChild(status)
       headBtn.appendChild(el('span', 'ts-think-meta', fmtTok(t.tokens) + ' tok' + (t.segments.length ? ' · ' + t.segments.length + ' 段' : '')))
       headBtn.addEventListener('click', () => {
