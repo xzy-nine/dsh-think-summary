@@ -21,6 +21,9 @@ export interface ThinkGroup {
   tokens: number
   startedAt: number
   segments: SegmentSummary[]
+  /** 会话 turn/step 标记（assistant/message 事件打标，供聊天流内 turnTail 匹配）。 */
+  turn?: number
+  step?: number
 }
 
 export interface ThinkState {

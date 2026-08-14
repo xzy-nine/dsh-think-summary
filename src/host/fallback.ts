@@ -79,9 +79,17 @@ export function installFallback(
         const k = `${sid}:${turn}:${step}`
         const entry = buf.get(k)
         buf.delete(k)
+        const { state } = store.ensureThink(sid, `t${turn}`)
+        // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配；
+        // 该步的 llm/stream 刚结束，最新 think 即此步思考）
+        const latest = state.thinks[state.thinks.length - 1]
+        if (latest && latest.id.startsWith('s') && !latest.active && latest.turn === undefined) {
+          latest.turn = turn
+          latest.step = step
+        }
         if (!entry || entry.text.length === 0) return
         const thinkKey = `t${turn}`
-        const { state, think } = store.ensureThink(sid, thinkKey)
+        const { think } = store.ensureThink(sid, thinkKey)
         // 实时路径已产出分段则跳过（该 think 已由实时路径置位 inSplice）
         if (state.inSplice && think.segments.length > 0) return
         const outcomes = processThinking(entry.text, {
