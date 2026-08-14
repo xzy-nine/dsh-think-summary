@@ -1,0 +1,14 @@
+# dependencies / caches
+node_modules/
+.npm-cache/
+
+# build output (npm pack 在发布时构建)
+lib/
+*.tsbuildinfo
+
+# library: lockfile 不纳入版本库
+package-lock.json
+pnpm-lock.yaml
+
+# logs
+*.log
