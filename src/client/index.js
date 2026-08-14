@@ -21,8 +21,12 @@ export function apply(ctx) {
       makeSettingsCard(scope),
     ))
     // 2) 聊天流内：对应助手消息输出下方的思考总结条（可折叠/多行）
+    //    select 返回值成为组件的 matched prop：传 TurnLocation 对象 + seq
     ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register(
-      { name: 'conversation.chat.turnTail', select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn.turn } : null) },
+      {
+        name: 'conversation.chat.turnTail',
+        select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null),
+      },
       makeThinkTail(),
     ))
     // 3) 输入框上方实时面板（配合输入框样式；只显示当前思考）

@@ -2,12 +2,16 @@
  * 聊天流内思考总结条（conversation.chat.turnTail 槽位）：
  * 在对应助手消息（一次思考 = 一个 step）输出下方渲染该 think 的分段摘要，
  * 可折叠、多行显示。匹配：sessionId + think.turn/step === 节点 turn/step。
+ *
+ * 槽位契约（Inspect 确认）：owner = { turn: TurnLocation, seq: number, openFile }；
+ * select 的返回值作为组件的 `matched` prop（非覆盖 props.turn/seq）。
  */
 function makeThinkTail() {
   return function ThinkTail(props) {
     const sessionId = props && props.sessionId
-    const turn = props && props.turn
-    const seq = props && props.seq
+    const m = props && props.matched
+    const turn = m && m.turn // TurnLocation（含 turn 号与 steps）
+    const seq = m && m.seq
     const [think, setThink] = React.useState(null)
     const [open, setOpen] = React.useState(true)
 
