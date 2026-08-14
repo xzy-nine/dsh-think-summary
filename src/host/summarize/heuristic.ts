@@ -96,18 +96,22 @@ export interface SegmentSummaryChoice {
 
 /**
  * 统一段摘要决策（0 token）：
- *  - 表格段（非代码）→ 结构化摘要，跳过精炼
+ *  - 表格段（非代码）→ 结构化摘要；skipTable=true 时跳过精炼
  *  - 代码段（围栏字符占比 > SKIP_CODE_RATIO）→ 结构化摘要；skipCode=true 时跳过精炼
  *  - 其余 → 启发式提取
  */
-export function summarizeSegment(text: string, meta: SegmentMeta | undefined, skipCode: boolean): SegmentSummaryChoice {
+export function summarizeSegment(
+  text: string,
+  meta: SegmentMeta | undefined,
+  skip: { skipCode: boolean; skipTable: boolean },
+): SegmentSummaryChoice {
   const codeRatio = meta?.codeRatio ?? 0
   const isTable = meta?.isTable === true
-  if (isTable && codeRatio <= SKIP_CODE_RATIO) return { summary: tableSummary(text), skipReason: 'table' }
+  if (isTable && codeRatio <= SKIP_CODE_RATIO) {
+    return skip.skipTable ? { summary: tableSummary(text), skipReason: 'table' } : { summary: tableSummary(text) }
+  }
   if (codeRatio > SKIP_CODE_RATIO) {
-    return skipCode
-      ? { summary: codeBlockSummary(text), skipReason: 'code' }
-      : { summary: codeBlockSummary(text) }
+    return { summary: codeBlockSummary(text), ...(skip.skipCode ? { skipReason: 'code' } : {}) }
   }
   return { summary: heuristicSummary(text) }
 }

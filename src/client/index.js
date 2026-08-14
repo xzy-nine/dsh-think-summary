@@ -89,8 +89,25 @@ const FIELD_GROUPS = [
   {
     caption: '小模型精炼',
     fields: [
-      { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后所有分段都会用最小模型精炼摘要' },
-      { key: 'refineSkipCode', label: '跳过代码段精炼', kind: 'bool', hint: '纯代码段不调小模型精炼（省 token），摘要显示"代码块 · N 行"' },
+      { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后所有可精炼分段都用最小模型精炼摘要' },
+      {
+        key: 'codeBlockMode', label: '代码块处理', kind: 'enum',
+        options: [
+          ['ignore', '忽略（不写内存，仅记行数）'],
+          ['keep-skip', '保留 + 跳过精炼'],
+          ['keep-refine', '保留并精炼'],
+        ],
+        hint: '忽略：代码内容不进内存、不精炼（省 token/内存），只留"代码块 · N 行"元信息',
+      },
+      {
+        key: 'tableMode', label: '表格处理', kind: 'enum',
+        options: [
+          ['ignore', '忽略（不写内存，仅记行数）'],
+          ['keep-skip', '保留 + 跳过精炼'],
+          ['keep-refine', '保留并精炼'],
+        ],
+        hint: '忽略：表格内容不进内存、不精炼，只留"表格 · N 行"元信息',
+      },
       {
         key: 'refineTrim', label: '精炼输入裁剪', kind: 'enum',
         options: [
@@ -130,6 +147,14 @@ function segStatus(s) {
 function segStatusEl(s) {
   const st = segStatus(s)
   return st ? React.createElement('span', { className: st.cls }, st.label) : null
+}
+
+/** 已精炼段的实际消耗标注：" · 精炼 ~N tok"（输入裁剪后 + 输出摘要）。 */
+function refineTokStr(s) {
+  if (!s || !s.refined) return ''
+  const rt = s.refineTokens || {}
+  const total = (rt.input || 0) + (rt.output || 0)
+  return total > 0 ? ' · 精炼 ~' + fmtTok(total) + ' tok' : ''
 }
 
 /** 开关（视觉 switch，实际是带 aria 的 button）。 */
@@ -514,7 +539,7 @@ function makeThinkTail() {
         'div', { key: s.index, className: 'ts-tail-seg' },
         React.createElement(
           'div', { className: 'ts-tail-seg-head' },
-          React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
+          React.createElement('span', null, '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s)),
           segStatusEl(s),
         ),
         React.createElement('div', { className: 'ts-tail-seg-text' }, s.summary),
@@ -597,7 +622,7 @@ function makeInputDock() {
           'div', { key: t.id + ':' + s.index, className: 'ts-dock-seg' },
           React.createElement(
             'div', { className: 'ts-dock-seg-head' },
-            React.createElement('span', null, prefix + '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
+            React.createElement('span', null, prefix + '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s)),
             segStatusEl(s),
           ),
           React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),

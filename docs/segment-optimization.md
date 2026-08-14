@@ -2,9 +2,10 @@
 
 > 目标：1) 分块更有逻辑；2) 更省 token。
 > 方法：Markdown 结构感知分段（代码块原子、列表/表格整体保留）+ 切点质量增强 + 精炼价值过滤。
-> 状态：**已实施**（v0.2）。用户决策：代码块原子保留+默认跳过精炼；表格整表原子+结构化摘要；
-> 跳过默认开；A+B+C 全做；精炼输入裁剪三档可配置（headtail/tail/full）。
-> 回归验证：`node scripts/seg-check.mjs` 全部通过。
+> 状态：**已实施**（v0.2）。用户决策：代码块/表格默认 **ignore**（内容不写内存、
+> 仅元信息段，计入总 token）；保留时按之前实现（原子+结构化摘要+可选精炼）；
+> 精炼输入裁剪三档可配置；段头同时显示原始输出 token 与精炼实际 token。
+> 回归验证：`node scripts/seg-check.mjs` 全部通过（含 ignore 模式）。
 
 ## 一、现状算法拆解
 
@@ -70,7 +71,10 @@ Segmenter 关键机制（`src/host/segment.ts`）：
 
 ### C. 省 token（P5/P6）⭐
 
-1. **代码段跳过精炼**（配置 `refineSkipCode`，默认开）：段内围栏字符占比 > 阈值（默认 50%）→ 启发式摘要改为"代码块 · ≈N 行 · <首行>"，不入精炼队列；state 标记 `refined: 'skipped'`，UI 显示"代码段·未精炼"（不再歧义）
+1. **代码块/表格三态处理**（`codeBlockMode`/`tableMode`，默认 `ignore`）：
+   - `ignore`（默认）：内容**不写进缓冲**（不占内存、不计段 token、不精炼），围栏闭/表格结束时产出极简元信息段（"代码块 · N 行 · 语言" / "表格 · N 行"，0 token、O(1) 内存）；检测器仍计入总 token（阈值/进度）
+   - `keep-skip`：保留内容（原子，永不因 max 在代码/表格内部切）+ 结构化摘要、跳过精炼（UI 标"代码段·未精炼"）
+   - `keep-refine`：保留内容 + 精炼
 2. **表格结构化摘要**：纯表格段 → "表：<列头> · N 行 · 首行 …"，0 token，不精炼
 3. **头尾裁剪**：`trimToTokens` → `headTailTrim`（保头 ~30% + 尾 ~70%，同预算下摘要信息量更高）。**三档可配置**：`refineTrim` = `'headtail'`（默认，保头+尾、丢中段）/ `'tail'`（仅保尾部，中段细节不丢但主题可能丢失）/ `'full'`（完整保留不裁剪，信息最全、最耗 token），供用户权衡信息损失
 4. **非推理模型优先**（可选）：`resolveModel` 时若 provider 有非推理小模型，精炼优先选它（无隐藏推理；outputTokens 可从 1024 降到 256）
@@ -80,8 +84,11 @@ Segmenter 关键机制（`src/host/segment.ts`）：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `refineSkipCode` | true | 纯代码段不调小模型精炼（结构化摘要 0 token 兜底，UI 标"代码段·未精炼"） |
+| `codeBlockMode` | 'ignore' | 代码块处理：忽略（不写内存，仅记行数）/ 保留+跳过精炼 / 保留并精炼 |
+| `tableMode` | 'ignore' | 表格处理：同上 |
 | `refineTrim` | 'headtail' | 精炼输入裁剪策略：头尾 / 仅尾部 / 完整保留 |
+
+段级展示：已精炼段同时显示**原始输出 token**（thinking 段长）与**精炼实际 token**（输入裁剪后 + 输出摘要，估算，`refineTokens`）。
 
 ### D. 流式健壮性（P7）
 

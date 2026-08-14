@@ -22,8 +22,14 @@ export interface ThinkSummaryConfig {
   refineOutputTokens?: number
   /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
   refineModel?: string
-  /** 跳过代码段精炼（纯代码段用结构化摘要，省 token）。 */
-  refineSkipCode?: boolean
+  /**
+   * 代码块处理：'ignore' 内容不写进缓冲（省内存/token，仅记行数元信息段）；
+   * 'keep-skip' 保留内容（原子不分段）+ 结构化摘要、跳过精炼；
+   * 'keep-refine' 保留内容 + 精炼。
+   */
+  codeBlockMode?: 'ignore' | 'keep-skip' | 'keep-refine'
+  /** 表格处理：同 codeBlockMode。 */
+  tableMode?: 'ignore' | 'keep-skip' | 'keep-refine'
   /**
    * 精炼输入裁剪策略：
    *  - 'headtail' 头尾裁剪（保留头部主题+尾部结论、丢中段，同预算信息量更高，但中段细节丢失）
@@ -33,9 +39,13 @@ export interface ThinkSummaryConfig {
   refineTrim?: 'headtail' | 'tail' | 'full'
 }
 
-export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim'>> & {
+export type BlockMode = 'ignore' | 'keep-skip' | 'keep-refine'
+
+export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim' | 'codeBlockMode' | 'tableMode'>> & {
   refineModel: string
   refineTrim: 'headtail' | 'tail' | 'full'
+  codeBlockMode: BlockMode
+  tableMode: BlockMode
 } = {
   enabled: true,
   thinkThresholdTokens: 2000,
@@ -46,7 +56,8 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   refineMaxInputTokens: 1500,
   refineOutputTokens: 1024,
   refineModel: 'auto',
-  refineSkipCode: true,
+  codeBlockMode: 'ignore',
+  tableMode: 'ignore',
   refineTrim: 'headtail',
 }
 

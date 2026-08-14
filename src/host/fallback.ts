@@ -98,7 +98,10 @@ export function installFallback(
             segmentMinTokens: opts.segmentMinTokens,
             segmentMaxTokens: opts.segmentMaxTokens,
           },
-          { skipCode: opts.refineSkipCode !== false },
+          {
+            skipCode: opts.codeBlockMode === 'keep-skip',
+            skipTable: opts.tableMode === 'keep-skip',
+          },
         )
         if (outcomes.length === 0) return
         const model = defaultModel?.() ?? { provider: '', model: '' }

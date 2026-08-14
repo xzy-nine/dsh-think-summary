@@ -1,8 +1,10 @@
 /**
  * 分段算法开发验证脚本（docs/segment-optimization.md 实现后）：
  *   node scripts/seg-check.mjs
- * 覆盖：围栏内不切、代码块原子、表格整体、有序列表边界、max 句末回溯、段元数据。
+ * 覆盖：围栏内不切、代码块原子、表格整体、有序列表边界、max 句末回溯、
+ * 段元数据、ignore 模式（内容不写缓冲 + 元信息段）。
  * 注意：markdown 围栏/列表必须独占行首（真实 LLM 输出如此）——粘在行尾不算围栏。
+ * Segmenter 默认 codeMode/tableMode='keep'（库级保守）；stream.ts 按配置传 'ignore'。
  */
 import { Segmenter, segmentText } from '../lib/host/segment.js'
 
@@ -16,15 +18,16 @@ const ok = (name, cond, extra = '') => {
 }
 
 /** 用流式 Segmenter 喂入若干增量块，收集切出的段。 */
-function streamSegments(text, options, chunkSize = 7) {
+function streamSegments(text, options, sink = null, chunkSize = 7) {
   const out = []
   const seg = new Segmenter(options, (t, tokens, meta) => out.push({ text: t, tokens, meta }))
+  if (sink) sink(seg)
   for (let i = 0; i < text.length; i += chunkSize) seg.feed(text.slice(i, i + chunkSize))
   seg.flush()
   return out
 }
 
-// ---------- 1. 围栏内边界行不误切（流式 + 静态） ----------
+// ---------- 1. 围栏内边界行不误切（流式 + 静态，keep 模式） ----------
 console.log('\n[1] 围栏内不切（`- 列表` / `### 标题` / `Step 1` 不应触发切段）')
 const fenceProse =
   '开头论述背景与目标，需要足够长的文字来跨越最小窗口。\n' +
@@ -35,7 +38,6 @@ const fenceProse =
 const live1 = streamSegments(fenceProse, { segmentMinTokens: 40, segmentMaxTokens: 400 })
 const static1 = segmentText(fenceProse, { segmentMinTokens: 40, segmentMaxTokens: 400 })
 const fenceIntact = (segs) => {
-  // 含 ```js 的段必须同时含闭合 ```，即代码块未被从中间切开
   for (const s of segs) {
     if (s.text.includes('```js')) {
       const close = (s.text.match(/```/g) || []).length
@@ -49,10 +51,10 @@ ok('静态：代码块未被切开', fenceIntact(static1))
 ok('流式：围栏两侧有真实切点（段数 ≥2）', live1.length >= 2)
 ok('静态：围栏两侧有真实切点（段数 ≥2）', static1.length >= 2)
 
-// ---------- 2. 代码块原子（超大代码块：围栏边界切，代码段不混散文） ----------
-console.log('\n[2] 代码块原子与代码段元数据')
+// ---------- 2. 代码块原子（keep 模式：超 max 不切内部） ----------
+console.log('\n[2] 代码块原子与代码段元数据（keep）')
 const bigCode =
-  '前面是论述段落，交代上下文与目标，需要足够文字支撑一个合理切点。\n' +
+  '前面是论述段落，交代上下文与目标，需要足够文字支撑一个合理切点，这里再补充一些篇幅，确保散文段在代码块前独立成段。\n' +
   '```ts\n' +
   Array.from({ length: 40 }, (_, i) => `export function fn${i}(a: number): number { return a + ${i} }`).join('\n') +
   '\n```\n' +
@@ -62,11 +64,12 @@ const openIdx = live2.findIndex((s) => s.text.includes('```ts'))
 const closeIdx = live2.findIndex((s) => s.text.trimEnd().endsWith('```'))
 ok('流式：代码段存在（含开围栏）', openIdx >= 0)
 ok('流式：代码段存在（含闭围栏）', closeIdx >= 0)
-ok('流式：代码段之间不混散文（均 codeRatio 高）', openIdx >= 0 && closeIdx >= 0 && live2.slice(openIdx, closeIdx + 1).every((s) => s.meta.codeRatio > 0.5))
+ok('流式：代码块原子（开闭围栏同段，超 max 不切内部）', openIdx >= 0 && openIdx === closeIdx)
+ok('流式：代码段 codeRatio 高', openIdx >= 0 && live2[openIdx].meta.codeRatio > 0.5)
 ok('流式：代码段前的散文段 codeRatio 低', openIdx > 0 && live2[openIdx - 1].meta.codeRatio < 0.5)
 
 // ---------- 3. 表格整体（不跨行切；isTable 判定） ----------
-console.log('\n[3] 表格整体 + isTable 元数据')
+console.log('\n[3] 表格整体 + isTable 元数据（keep）')
 const tableText =
   '表格前的论述段落，用于填充最小窗口，保证切点逻辑被完整走一遍。\n' +
   '| 名称 | 类型 | 说明 |\n| --- | --- | --- |\n' +
@@ -99,6 +102,40 @@ ok('流式：每段以句末标点收尾（句末回溯）', endsOk, JSON.string
 console.log('\n[6] flush 小尾巴下限')
 const tiny = streamSegments('短尾巴文本。', { segmentMinTokens: 40, segmentMaxTokens: 400 })
 ok('流式：低于下限的尾巴不出段', tiny.length === 0)
+
+// ---------- 7. ignore 模式：代码/表格内容不写缓冲，产出元信息段 ----------
+console.log('\n[7] ignore 模式（默认）：内容不写缓冲 + 元信息段')
+const ignoreText =
+  '散文段落一，需要足够长度跨越最小窗口，用于验证忽略模式下的分段，这里再补充一些内容确保超过下限。\n' +
+  '```py\nprint(1)\nprint(2)\n```\n' +
+  '散文段落二，继续累积验证元信息段顺序与散文分段，这里补充足够多的文字以确保超过小尾巴下限不被丢弃。\n' +
+  '散文段落二补，继续追加内容确保收尾段超过最小下限。\n'
+const metas = []
+const segs7 = []
+const seg7 = new Segmenter(
+  { segmentMinTokens: 40, segmentMaxTokens: 400, codeMode: 'ignore', tableMode: 'ignore', onMeta: (info) => metas.push(info) },
+  (t, tokens, meta) => segs7.push({ text: t, tokens, meta }),
+)
+for (let i = 0; i < ignoreText.length; i += 5) seg7.feed(ignoreText.slice(i, i + 5))
+seg7.flush()
+ok('ignore：产出代码元信息（行数=2、语言=py）', metas.some((m) => m.kind === 'code' && m.lines === 2 && m.lang === 'py'))
+ok('ignore：产出段不含代码内容', segs7.every((s) => !s.text.includes('print(')))
+ok('ignore：散文段正常切出（≥2 段）', segs7.length >= 2)
+
+const ignoreTable =
+  '散文段落，足够长度跨越最小窗口，验证表格忽略。\n' +
+  '| 名称 | 值 |\n| --- | --- |\n| a | 1 |\n| b | 2 |\n' +
+  '表格后的散文段落继续累积。\n'
+const metasT = []
+const segsT = []
+const segT = new Segmenter(
+  { segmentMinTokens: 40, segmentMaxTokens: 400, codeMode: 'ignore', tableMode: 'ignore', onMeta: (info) => metasT.push(info) },
+  (t, tokens, meta) => segsT.push({ text: t, tokens, meta }),
+)
+for (let i = 0; i < ignoreTable.length; i += 5) segT.feed(ignoreTable.slice(i, i + 5))
+segT.flush()
+ok('ignore：产出表格元信息（行数=4）', metasT.some((m) => m.kind === 'table' && m.lines === 4))
+ok('ignore：产出段不含表格内容', segsT.every((s) => !s.text.includes('| a |')))
 
 console.log(failed === 0 ? '\n全部通过 ✅' : `\n${failed} 项失败 ❌`)
 process.exit(failed === 0 ? 0 : 1)

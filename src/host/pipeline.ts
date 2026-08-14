@@ -20,17 +20,20 @@ export interface SegmentOutcome {
 }
 
 /**
- * 事后兜底处理。extra.skipCode：代码段是否跳过精炼
- * （对应设置 refineSkipCode，默认 true）。
+ * 事后兜底处理。extra.skipCode/skipTable：代码段/表格段是否跳过精炼
+ * （对应设置 codeBlockMode/tableMode 的 keep-skip 分支，默认 ignore 不产出内容段）。
  */
 export function processThinking(
   text: string,
   options: SegmentOptions = {},
-  extra: { skipCode?: boolean } = {},
+  extra: { skipCode?: boolean; skipTable?: boolean } = {},
 ): SegmentOutcome[] {
   const pieces = segmentText(text, options)
   return pieces.map((p, i) => {
-    const choice = summarizeSegment(p.text, p.meta, extra.skipCode !== false)
+    const choice = summarizeSegment(p.text, p.meta, {
+      skipCode: extra.skipCode !== false,
+      skipTable: extra.skipTable !== false,
+    })
     return {
       index: i,
       text: p.text,

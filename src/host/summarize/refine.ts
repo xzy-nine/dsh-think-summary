@@ -43,7 +43,14 @@ export interface RefineTask {
 }
 
 export interface RefineApply {
-  (sessionId: string, thinkId: string, segmentIndex: number, refinedSummary: string): void
+  (
+    sessionId: string,
+    thinkId: string,
+    segmentIndex: number,
+    refinedSummary: string,
+    /** 本次精炼实际消耗（估算）：输入 = 裁剪后喂入的 token，输出 = 摘要 token。 */
+    refineTokens: { input: number; output: number },
+  ): void
 }
 
 /** 在途任务控制器：携带归属，供按 (session, think) 精确取消。 */
@@ -209,8 +216,13 @@ export class RefineQueue {
         o.model && o.model !== 'auto'
           ? o.model
           : await resolveModel(llm, task.provider, task.fallbackModel)
-      const out = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, controller.signal)
-      if (out && out.length > 0) this.apply(task.sessionId, task.thinkId, task.segmentIndex, out)
+      const res = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, controller.signal)
+      if (res && res.text.length > 0) {
+        this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
+          input: res.inputTokens,
+          output: estimateTokens(res.text),
+        })
+      }
     } catch (error) {
       // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求；
       // 记录失败便于排查"未精炼"的段
@@ -235,10 +247,16 @@ export class RefineQueue {
     maxInputTokens: number,
     outputTokens: number,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ text: string; inputTokens: number }> {
     // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；
     // system 走顶层字段；该 provider 不支持 reasoningEffort（勿设置）。
     const trimMode = this.getOptions().trim
+    const inputText =
+      trimMode === 'tail'
+        ? trimToTokens(task.text, maxInputTokens)
+        : trimMode === 'full'
+          ? task.text
+          : headTailTrim(task.text, maxInputTokens)
     const stream = llm.stream({
       provider: task.provider,
       model,
@@ -247,17 +265,7 @@ export class RefineQueue {
       messages: [
         {
           role: 'user',
-          content: [
-            {
-              type: 'text',
-              text:
-                trimMode === 'tail'
-                  ? trimToTokens(task.text, maxInputTokens)
-                  : trimMode === 'full'
-                    ? task.text
-                    : headTailTrim(task.text, maxInputTokens),
-            },
-          ],
+          content: [{ type: 'text', text: inputText }],
         },
       ],
       signal,
@@ -268,6 +276,7 @@ export class RefineQueue {
       if (c && c.type === 'text-delta' && typeof c.text === 'string') out += c.text
     }
     const trimmed = out.trim()
-    return trimmed.length > DISPLAY_MAX_CHARS ? trimmed.slice(0, DISPLAY_MAX_CHARS) + '…' : trimmed
+    const text = trimmed.length > DISPLAY_MAX_CHARS ? trimmed.slice(0, DISPLAY_MAX_CHARS) + '…' : trimmed
+    return { text, inputTokens: estimateTokens(inputText) }
   }
 }

@@ -53,6 +53,26 @@ export function installDetect(
         segmentMinTokens: opts.segmentMinTokens,
         segmentMaxTokens: opts.segmentMaxTokens,
         canCut: () => detector.inSplice,
+        codeMode: opts.codeBlockMode === 'ignore' ? 'ignore' : 'keep',
+        tableMode: opts.tableMode === 'ignore' ? 'ignore' : 'keep',
+        onMeta: (info) => {
+          // 忽略模式：代码块/表格内容不写缓冲，围栏闭/表格结束时产出极简元信息段
+          const summary =
+            info.kind === 'code'
+              ? '代码块 · ' + (info.lang ? info.lang + ' · ' : '') + '约 ' + info.lines + ' 行'
+              : '表格 · 约 ' + info.lines + ' 行'
+          const h = hashText('meta:' + summary)
+          if (state.hashes.has(h)) return
+          state.hashes.add(h)
+          store.pushSegment(state, think.id, {
+            index: think.segments.length,
+            summary,
+            tokens: 0,
+            refined: false,
+            skipReason: info.kind,
+            ts: Date.now(),
+          })
+        },
       },
       (text: string, tokens: number, meta) => {
         // 门控保证 cut 只发生在 inSplice 之后；state 级去重防重试/重放
@@ -60,8 +80,11 @@ export function installDetect(
         if (state.hashes.has(h)) return
         state.hashes.add(h)
         const idx = think.segments.length
-        // 代码段/表格段：结构化摘要（0 token），按配置跳过精炼（省 token）
-        const choice = summarizeSegment(text, meta, opts.refineSkipCode !== false)
+        // 代码段/表格段（keep 模式）：结构化摘要（0 token），精炼与否按 mode
+        const choice = summarizeSegment(text, meta, {
+          skipCode: opts.codeBlockMode === 'keep-skip',
+          skipTable: opts.tableMode === 'keep-skip',
+        })
         store.pushSegment(state, think.id, {
           index: idx,
           summary: choice.summary,

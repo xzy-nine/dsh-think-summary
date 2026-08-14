@@ -25,7 +25,8 @@ const Config = z.object({
   refineMaxInputTokens: z.number().default(1500),
   refineOutputTokens: z.number().default(1024),
   refineModel: z.string().default('auto'),
-  refineSkipCode: z.boolean().default(true),
+  codeBlockMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
+  tableMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),
 })
 
@@ -48,13 +49,14 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   const refine = new RefineQueue(
     () => getConfig(),
     () => ctx.get('llm') as LlmLike | undefined,
-    (sessionId, thinkId, segmentIndex, refinedSummary) => {
+    (sessionId, thinkId, segmentIndex, refinedSummary, refineTokens) => {
       const s = store.get(sessionId)
       const think = s?.thinks.find((t) => t.id === thinkId)
       const seg = think?.segments[segmentIndex]
       if (seg && s) {
         seg.summary = refinedSummary
         seg.refined = true
+        seg.refineTokens = refineTokens
         s.updatedAt = Date.now()
       }
     },

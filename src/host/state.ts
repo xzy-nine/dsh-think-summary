@@ -12,6 +12,8 @@ export interface SegmentSummary {
   refined: boolean
   /** 'code'/'table' = 结构化摘要已足够，未调小模型精炼（省 token）。 */
   skipReason?: 'code' | 'table'
+  /** 精炼实际消耗（估算）：输入 = 裁剪后喂入的 token，输出 = 摘要 token。 */
+  refineTokens?: { input?: number; output?: number }
   ts: number
 }
 
