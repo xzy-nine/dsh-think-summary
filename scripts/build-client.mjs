@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 拼接顺序 = 依赖序（前序模块的 const/function 被后续模块使用）。 */
-const MODULES = ['constants.js', 'utils.js', 'styles.js', 'settings.js', 'tail.js', 'dock.js', 'index.js']
+const MODULES = ['constants.js', 'utils.js', 'styles.js', 'settings.js', 'tail.js', 'dock.js', 'views.js', 'index.js']
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const all = MODULES.map((f) => readFileSync(join(root, 'src', 'client', f), 'utf8')).join('\n')

@@ -40,4 +40,22 @@ const PANEL_CSS = `
 .ts-tail-seg + .ts-tail-seg{border-top:1px solid var(--dsw-alias-separator-primary)}
 .ts-tail-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
 .ts-tail-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
+.ts-view{box-sizing:border-box;width:100%;max-width:calc(var(--dsh-composer-card-max-width) - 2 * var(--dsh-composer-dock-inset, 8px));margin:0 auto;padding:16px 12px 32px}
+.ts-view-header{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+.ts-view-title-lg{font-size:16px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.ts-view-sub{font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.ts-view-empty{padding:24px 4px;font-size:13px;color:var(--dsw-alias-label-tertiary)}
+.ts-view-list{flex-direction:column;gap:8px;display:flex}
+.ts-view-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:8px;overflow:hidden}
+.ts-view-head{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
+.ts-view-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-view-chevron{transition:transform .12s;color:var(--dsw-alias-label-tertiary);flex:none}
+.ts-view-card[data-open="true"] .ts-view-chevron{transform:rotate(180deg)}
+.ts-view-title{font-weight:600;flex:none}
+.ts-view-meta{flex:1;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+.ts-view-body{border-top:1px solid var(--dsw-alias-separator-primary);max-height:360px;overflow-y:auto}
+.ts-view-seg{padding:6px 12px 6px 26px}
+.ts-view-seg + .ts-view-seg{border-top:1px solid var(--dsw-alias-separator-primary)}
+.ts-view-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
+.ts-view-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
 `

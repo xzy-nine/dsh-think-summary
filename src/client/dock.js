@@ -1,15 +1,30 @@
 /**
  * 输入框上方实时面板（conversation.input.dock 槽位）：
- * 样式配合输入框（input-major 背景 + 宽度对齐 composer 卡片）；可折叠、多行；
+ * 样式配合输入框（宽度对齐官方 todo/queue dock）；可折叠、多行；
  * 只实时显示**当前这次思考**的每段摘要（思考中实时滚动，结束后短暂保留；
  * 新思考积累期保留上次思考摘要作为参照，首个新段出现即切换）。
+ *
+ * 视图过滤：只在"对话"视图显示（轨迹/思考总结等视图隐藏）。
+ * 会话 store 的 view 状态在 slot 组件侧不可订阅，故检测 tablist 的
+ * aria-selected（chat 视图 tab label = '对话'/'chat'）。
  */
+
+/** 当前激活会话视图是否为"对话"。无 tablist（单视图/hero）视为对话。 */
+function isChatTabActive() {
+  if (typeof document === 'undefined') return true
+  const tab = document.querySelector('[role="tablist"] [role="tab"][aria-selected="true"]')
+  if (!tab) return true
+  const s = (tab.textContent || '').trim()
+  return s === '对话' || s.toLowerCase() === 'chat'
+}
+
 function makeInputDock() {
   return function ThinkInputDock(props) {
     const sessionId = props && props.sessionId
     const [state, setState] = React.useState(null)
     const [open, setOpen] = React.useState(true)
     const [prevOpen, setPrevOpen] = React.useState(false)
+    const [chatView, setChatView] = React.useState(true)
 
     React.useEffect(() => {
       if (!sessionId) return undefined
@@ -26,6 +41,7 @@ function makeInputDock() {
           /* 轮询失败不影响聊天 */
         } finally {
           if (!alive) return
+          setChatView(isChatTabActive())
           timer = setTimeout(poll, 1500)
         }
       }
@@ -35,6 +51,8 @@ function makeInputDock() {
         if (timer !== null) clearTimeout(timer)
       }
     }, [sessionId])
+
+    if (!chatView) return null // 非"对话"视图：隐藏实时思考面板
 
     // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（常驻显示最近一次）
     let think = null

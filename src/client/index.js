@@ -29,12 +29,17 @@ export function apply(ctx) {
       },
       makeThinkTail(),
     ))
-    // 3) 输入框上方实时面板（配合输入框样式；只显示当前思考）
+    // 3) "思考总结"视图选项卡：全会话思考总结（conversation.view 条目）
+    ctx.slots.inject('conversation.view', () => ctx.slots.register(
+      { name: 'conversation.view', id: 'think-summary', order: 20, label: '思考总结' },
+      makeThinkSummaryView(),
+    ))
+    // 4) 输入框上方实时面板（配合输入框样式；只显示当前思考，且仅在"对话"视图）
     ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
       { name: 'conversation.input.dock', id: 'think-summary.dock', order: 1 },
       makeInputDock(),
     ))
-    // 4) 样式注入
+    // 5) 样式注入
     if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-thinksummary-css]')) {
       const style = document.createElement('style')
       style.dataset.dshThinksummaryCss = ''
