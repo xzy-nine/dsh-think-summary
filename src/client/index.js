@@ -49,6 +49,11 @@ const PANEL_CSS = `
 .ts-dock-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
 .ts-dock-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
 .ts-dock-placeholder{padding:6px 12px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.ts-dock-prev{display:flex;align-items:center;gap:6px;width:100%;padding:5px 12px;background:transparent;border:none;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11.5px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
+.ts-dock-prev:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-dock-prev-chevron{transition:transform .12s}
+.ts-dock-prev[aria-expanded="true"] .ts-dock-prev-chevron{transform:rotate(90deg)}
+.ts-dock-prev-body{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}
 .ts-seg-refined{color:var(--dsw-alias-state-business-primary)}
 .ts-tail{margin:4px 16px 4px 30px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
 .ts-tail-head{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
@@ -506,6 +511,7 @@ function makeInputDock() {
     const sessionId = props && props.sessionId
     const [state, setState] = React.useState(null)
     const [open, setOpen] = React.useState(true)
+    const [prevOpen, setPrevOpen] = React.useState(false)
 
     React.useEffect(() => {
       if (!sessionId) return undefined
@@ -534,27 +540,74 @@ function makeInputDock() {
 
     // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（常驻显示最近一次）
     let think = null
+    let prev = null
     if (state && state.thinks && state.thinks.length > 0) {
       think = state.thinks.find((t) => t.active) || state.thinks[state.thinks.length - 1]
+      const idx = state.thinks.indexOf(think)
+      if (idx > 0) prev = state.thinks[idx - 1]
     }
+    // 新思考积累期（活跃且还没有段）：保留上次思考摘要作为参照，首个新段出现即切换
+    const accumulating = think !== null && think.active && think.segments.length === 0
 
-    // 常驻显示：无当前思考时显示空闲态（等待思考…），有思考时显示该次思考的摘要
     const active = think ? think.active : false
     const refinedCount = think ? think.segments.filter((s) => s.refined).length : 0
 
-    const segEls = think
-      ? think.segments.map((s) =>
+    const segEls = (t, prefix) =>
+      (t ? t.segments : []).map((s) =>
+        React.createElement(
+          'div', { key: t.id + ':' + s.index, className: 'ts-dock-seg' },
           React.createElement(
-            'div', { key: s.index, className: 'ts-dock-seg' },
-            React.createElement(
-              'div', { className: 'ts-dock-seg-head' },
-              React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
-              s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
-            ),
-            React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
+            'div', { className: 'ts-dock-seg-head' },
+            React.createElement('span', null, prefix + '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
+            s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
           ),
-        )
-      : []
+          React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
+        ),
+      )
+
+    // 主体内容
+    let body
+    if (think === null) {
+      body = React.createElement('div', { className: 'ts-dock-placeholder' }, '等待模型思考，超阈值后开始分段总结…')
+    } else if (accumulating) {
+      // 新思考积累中：保留上次思考摘要（标注），当前思考占位行
+      const prevBlock = prev && prev.segments.length > 0
+        ? React.createElement(
+            React.Fragment,
+            null,
+            React.createElement('div', { className: 'ts-dock-placeholder', style: { paddingBottom: 2 } }, '上次思考总结（保留中，新段出现后切换）'),
+            ...segEls(prev, '上次 · '),
+          )
+        : null
+      body = React.createElement(
+        React.Fragment,
+        null,
+        prevBlock,
+        React.createElement('div', { className: 'ts-dock-placeholder' }, '当前思考积累中 · ' + fmtTok(think.tokens) + ' tok…'),
+      )
+    } else {
+      // 当前思考已有段：显示当前段；上次思考收成可展开一行
+      const prevToggle = prev && prev.segments.length > 0
+        ? React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'ts-dock-prev',
+              onClick: () => setPrevOpen(!prevOpen),
+              'aria-expanded': prevOpen ? 'true' : 'false',
+            },
+            React.createElement('span', { className: 'ts-dock-prev-chevron' }, '▸'),
+            React.createElement('span', null, '上次思考 · ' + prev.segments.length + ' 段'),
+          )
+        : null
+      body = React.createElement(
+        React.Fragment,
+        null,
+        think.segments.length > 0 ? segEls(think, '') : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考…'),
+        prevToggle,
+        prevOpen && prev ? React.createElement('div', { className: 'ts-dock-prev-body' }, ...segEls(prev, '上次 · ')) : null,
+      )
+    }
 
     return React.createElement(
       'div', { className: 'ts-dock' },
@@ -576,16 +629,7 @@ function makeInputDock() {
           active ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
           refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined', style: { fontSize: 11 } }, refinedCount + ' 段已精炼') : null,
         ),
-        open
-          ? React.createElement(
-              'div', { className: 'ts-dock-body' },
-              think === null
-                ? React.createElement('div', { className: 'ts-dock-placeholder' }, '等待模型思考，超阈值后开始分段总结…')
-                : think.segments.length > 0
-                  ? segEls
-                  : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考，达到段窗口后逐段出摘要…'),
-            )
-          : null,
+        open ? React.createElement('div', { className: 'ts-dock-body' }, body) : null,
       ),
     )
   }
