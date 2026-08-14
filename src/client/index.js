@@ -32,43 +32,24 @@ const T = {
   warn: '#ffd60a',
 }
 
-/** 侧边栏面板样式（注入一次 <style>；与 shell 原生导航条目同款尺寸/token）。 */
+/** 样式（注入一次 <style>；dock 面板配合输入框样式：input-major 背景 + 圆角 + dock 宽度公式）。 */
 const PANEL_CSS = `
-.ts-block{}
-.ts-entry{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 12px;background:transparent;border:none;border-radius:8px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;white-space:nowrap;text-align:left;transition:background-color 120ms ease,color 120ms ease}
-.ts-entry:hover{background:var(--dsw-specific-sidebar-nav-item-hover);color:var(--dsw-alias-label-primary)}
-.ts-entry[data-active="true"]{background:var(--dsw-specific-sidebar-nav-item-active);color:var(--dsw-alias-label-primary);font-weight:600}
-.ts-entry:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
-.ts-entry:active{transform:translateY(1px)}
-.ts-entryIcon{display:inline-flex;align-items:center;justify-content:center;flex:none}
-.ts-entryLabel{overflow:hidden;text-overflow:ellipsis}
-[data-dsh-frame][data-sidebar-collapsed] .ts-entry{justify-content:center;padding:0;width:100%}
-[data-dsh-frame][data-sidebar-collapsed] .ts-entryLabel{display:none}
-[data-dsh-frame][data-sidebar-collapsed] .ts-card{display:none}
-.ts-card{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);margin:2px 12px 6px;overflow:hidden}
-.ts-card[hidden]{display:none}
-.ts-head{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--dsw-alias-separator-primary);font-size:12px;color:var(--dsw-alias-label-primary)}
-.ts-dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--dsw-alias-state-success-primary)}
-.ts-dot[data-active="true"]{background:var(--dsw-alias-state-warn-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-warn-primary) 25%,transparent)}
-.ts-head-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
-.ts-head-refined{color:var(--dsw-alias-state-business-primary);font-size:11px}
-.ts-body{max-height:50vh;overflow:auto}
-.ts-think{border-bottom:1px solid var(--dsw-alias-separator-primary)}
-.ts-think:last-child{border-bottom:none}
-.ts-think-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
-.ts-think-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.ts-think-chevron{transition:transform .12s;color:var(--dsw-alias-label-tertiary)}
-.ts-think[data-open="true"] .ts-think-chevron{transform:rotate(180deg)}
-.ts-think-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ts-think-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;white-space:nowrap}
-.ts-think-status{flex:none;font-size:10.5px;white-space:nowrap;color:var(--dsw-alias-label-tertiary)}
-.ts-think-status[data-active="true"]{color:var(--dsw-alias-state-warn-primary)}
-.ts-seg{display:flex;gap:8px;align-items:baseline;padding:3px 10px 3px 22px;font-size:12px}
-.ts-seg-num{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;min-width:16px;text-align:right}
-.ts-seg-sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-primary)}
-.ts-seg-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;white-space:nowrap}
+.ts-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);padding:0 var(--dsh-composer-dock-inset);flex:none}
+.ts-dock-panel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);box-shadow:var(--dsw-shadow-lv1);border-radius:12px;width:100%;overflow:hidden}
+.ts-dock-head{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:transparent;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px 12px;display:flex;transition:background-color 120ms ease}
+.ts-dock-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-dock-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .12s}
+.ts-dock[data-open="true"] .ts-dock-chevron{transform:rotate(180deg)}
+.ts-dock-title{color:var(--dsw-alias-label-primary);flex:none;font-size:13px;font-weight:500;line-height:24px}
+.ts-dock-progress{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:auto;font-size:13px;line-height:20px;overflow:hidden}
+.ts-dock-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-state-warn-primary)}
+.ts-dock-body{flex-direction:column;max-height:240px;padding:2px 0;display:flex;overflow-y:auto}
+.ts-dock-seg{padding:6px 12px 6px 24px}
+.ts-dock-seg + .ts-dock-seg{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}
+.ts-dock-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
+.ts-dock-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
+.ts-dock-placeholder{padding:6px 12px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .ts-seg-refined{color:var(--dsw-alias-state-business-primary)}
-.ts-placeholder{padding:6px 10px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .ts-tail{margin:4px 16px 4px 30px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
 .ts-tail-head{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}
 .ts-tail-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -515,222 +496,98 @@ function makeThinkTail() {
   }
 }
 
-/** 侧边栏"思考总结"：入口按钮 + 可折叠卡片（按每次思考分组，组内可折叠）。 */
-function mountSidebarPanel() {
-  const block = document.createElement('div')
-  block.className = 'ts-block'
-  block.dataset.dshThinksummaryBlock = ''
+/**
+ * 输入框上方实时面板（conversation.input.dock）：
+ * 样式配合输入框（input-major 背景 + dock 宽度公式）；可折叠、多行；
+ * 只实时显示**当前这次思考**的每段摘要（思考中实时滚动，结束后短暂保留）。
+ */
+function makeInputDock() {
+  return function ThinkInputDock(props) {
+    const sessionId = props && props.sessionId
+    const [state, setState] = React.useState(null)
+    const [open, setOpen] = React.useState(true)
 
-  const entry = document.createElement('button')
-  entry.type = 'button'
-  entry.className = 'ts-entry'
-  entry.dataset.dshThinksummaryEntry = ''
-  entry.setAttribute('aria-label', '思考总结')
-  entry.innerHTML = '<span class="ts-entryIcon">' + ENTRY_ICON + '</span><span class="ts-entryLabel">思考总结</span>'
-
-  const card = document.createElement('div')
-  card.className = 'ts-card'
-  card.hidden = true
-  block.append(entry, card)
-
-  const expanded = new Set()
-  let cardOpen = false
-  let lastState = null
-  let alive = true
-  let pollTimer = null
-
-  const el = (tag, cls, text) => {
-    const node = document.createElement(tag)
-    if (cls) node.className = cls
-    if (text !== undefined) node.textContent = text
-    return node
-  }
-
-  const render = () => {
-    while (card.firstChild) card.removeChild(card.firstChild)
-    const state = lastState
-    if (!state) {
-      card.appendChild(el('div', 'ts-placeholder', '尚无思考活动'))
-      return
-    }
-    const thinks = state.thinks || []
-    // 头部：状态 + 计数
-    const head = el('div', 'ts-head')
-    const dot = el('span', 'ts-dot')
-    if (state.active) dot.dataset.active = 'true'
-    head.appendChild(dot)
-    head.appendChild(el('span', null, state.active ? '思考中' : '思考结束'))
-    head.appendChild(el('span', 'ts-head-tok', fmtTok(state.thinkingTokens) + ' tok'))
-    const totalSegs = thinks.reduce((sum, t) => sum + t.segments.length, 0)
-    head.appendChild(el('span', 'ts-head-tok', totalSegs + ' 段'))
-    const refinedCount = thinks.reduce((sum, t) => sum + t.segments.filter((s) => s.refined).length, 0)
-    if (refinedCount > 0) {
-      head.appendChild(el('span', 'ts-head-refined', refinedCount + ' 段已精炼'))
-    }
-    card.appendChild(head)
-
-    const body = el('div', 'ts-body')
-    card.appendChild(body)
-
-    if (thinks.length === 0) {
-      body.appendChild(el('div', 'ts-placeholder', '等待思考…'))
-      return
-    }
-    thinks.forEach((t, thinkIndex) => {
-      const thinkEl = el('div', 'ts-think')
-      const open = expanded.has(t.id)
-      thinkEl.dataset.open = open ? 'true' : 'false'
-      const headBtn = el('button', 'ts-think-head')
-      headBtn.type = 'button'
-      headBtn.appendChild(el('span', 'ts-think-chevron', '▾'))
-      headBtn.appendChild(el('span', 'ts-think-title', '第 ' + (thinkIndex + 1) + ' 次思考'))
-      const status = el('span', 'ts-think-status', t.active ? '● 思考中' : '完成')
-      if (t.active) status.dataset.active = 'true'
-      headBtn.appendChild(status)
-      headBtn.appendChild(el('span', 'ts-think-meta', fmtTok(t.tokens) + ' tok' + (t.segments.length ? ' · ' + t.segments.length + ' 段' : '')))
-      headBtn.addEventListener('click', () => {
-        if (expanded.has(t.id)) expanded.delete(t.id)
-        else expanded.add(t.id)
-        thinkEl.dataset.open = expanded.has(t.id) ? 'true' : 'false'
-        const wrap = thinkEl.querySelector('.ts-think-segs')
-        if (wrap) wrap.hidden = !expanded.has(t.id)
-      })
-      thinkEl.appendChild(headBtn)
-      const segsWrap = el('div', 'ts-think-segs')
-      segsWrap.hidden = !open
-      if (t.segments.length === 0) {
-        segsWrap.appendChild(el('div', 'ts-placeholder', '正在积累思考，达到段窗口后逐段出摘要…'))
-      } else {
-        t.segments.forEach((s) => {
-          const row = el('div', 'ts-seg')
-          row.appendChild(el('span', 'ts-seg-num', String(s.index + 1)))
-          const sum = el('span', 'ts-seg-sum', s.summary)
-          sum.title = '第' + (s.index + 1) + '段 · ' + s.tokens + ' tok'
-          row.appendChild(sum)
-          const metaEl = el('span', 'ts-seg-meta', s.refined ? '已精炼' : '')
-          if (s.refined) metaEl.className = 'ts-seg-meta ts-seg-refined'
-          row.appendChild(metaEl)
-          segsWrap.appendChild(row)
-        })
+    React.useEffect(() => {
+      if (!sessionId) return undefined
+      let alive = true
+      let timer = null
+      const poll = async () => {
+        try {
+          const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
+          if (!res.ok) return
+          const json = await res.json()
+          if (!alive) return
+          setState((json && json.state) || null)
+        } catch {
+          /* 轮询失败不影响聊天 */
+        } finally {
+          if (!alive) return
+          timer = setTimeout(poll, 1500)
+        }
       }
-      thinkEl.appendChild(segsWrap)
-      body.appendChild(thinkEl)
-    })
-  }
+      void poll()
+      return () => {
+        alive = false
+        if (timer !== null) clearTimeout(timer)
+      }
+    }, [sessionId])
 
-  const poll = async () => {
-    try {
-      const res = await fetch(STATE_ROUTE)
-      if (!res.ok) return
-      const json = await res.json()
-      if (!alive) return
-      const state = (json && json.state) || null
-      lastState = state
-      if (state) {
-        for (const t of state.thinks || []) if (t.active) expanded.add(t.id)
-      }
-      // 思考一开始就显示卡片（不等阈值）；结束后保留 KEEP_MS
-      if (state && (state.active || Date.now() - (state.updatedAt || 0) < KEEP_MS)) {
-        card.hidden = false
-        entry.dataset.active = 'true'
-      } else if (state && !cardOpen) {
-        card.hidden = true
-        delete entry.dataset.active
-      }
-      render()
-    } catch {
-      /* 轮询失败不影响聊天 */
-    } finally {
-      if (alive) {
-        const idle = !lastState || (!lastState.active && Date.now() - (lastState.updatedAt || 0) >= KEEP_MS)
-        pollTimer = setTimeout(poll, idle ? IDLE_POLL_MS : POLL_MS)
+    // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（短暂保留后隐藏）
+    let think = null
+    let fresh = false
+    if (state) {
+      think = state.thinks.find((t) => t.active) || null
+      if (!think && state.thinks.length > 0) {
+        const last = state.thinks[state.thinks.length - 1]
+        fresh = Date.now() - (state.updatedAt || 0) < 8000
+        if (fresh) think = last
       }
     }
-  }
+    // 无当前思考 → 不渲染
+    if (!think) return null
+    const active = think.active
 
-  entry.addEventListener('click', () => {
-    cardOpen = !cardOpen
-    if (cardOpen) {
-      card.hidden = false
-      entry.dataset.active = 'true'
-      if (lastState && lastState.thinks && lastState.thinks.length > 0) {
-        expanded.add(lastState.thinks[lastState.thinks.length - 1].id)
-      }
-    } else if (!(lastState && (lastState.active || Date.now() - (lastState.updatedAt || 0) < KEEP_MS))) {
-      card.hidden = true
-      delete entry.dataset.active
-    } else {
-      delete entry.dataset.active
-    }
-    render()
-  })
+    const refinedCount = think.segments.filter((s) => s.refined).length
+    const segEls = think.segments.map((s) =>
+      React.createElement(
+        'div', { key: s.index, className: 'ts-dock-seg' },
+        React.createElement(
+          'div', { className: 'ts-dock-seg-head' },
+          React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
+          s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
+        ),
+        React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
+      ),
+    )
 
-  // ---- 注入侧边栏（自愈，task-board 同款） ----
-  const sidebarRoot = () => {
-    const column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]')
-    if (!column) return undefined
-    const logoOwner = column.querySelector('[class*="logoRow"]')?.parentElement
-    return logoOwner || column.firstElementChild || undefined
-  }
-  const newSessionButton = (root) => {
-    const nested = root.querySelector('button[class*="newSession"]')
-    if (nested) return nested
-    for (const child of root.children) if (child.tagName === 'BUTTON') return child
-    return undefined
-  }
-  const place = (root) => {
-    const button = newSessionButton(root)
-    if (!button) return false
-    if (block.parentElement !== root) {
-      const row = button.closest('[class*="logoRow"]')
-      const base = (row && row.parentElement === root) ? row : button
-      const family = Array.from(root.children).filter(
-        (node) => node instanceof HTMLElement && node.matches('[data-dsh-thinksummary-block], [data-dsh-taskboard-entry], [data-dsh-ssh-entry]'),
-      )
-      const anchor = family.length > 0 ? family[0] : base.nextElementSibling
-      root.insertBefore(block, anchor)
-    }
-    return true
-  }
-
-  let root
-  let placed = false
-  const tryPlace = () => {
-    if (root !== undefined && !root.isConnected) {
-      rootObserver.disconnect()
-      root = undefined
-      placed = false
-    }
-    if (placed) {
-      if (document.body.contains(block)) return
-      rootObserver.disconnect()
-      root = undefined
-      placed = false
-    }
-    root = root || sidebarRoot()
-    if (root === undefined) return
-    placed = place(root)
-    if (placed) rootObserver.observe(root, { childList: true, subtree: true })
-  }
-  const rootObserver = new MutationObserver(() => {
-    if (root === undefined || !root.isConnected) {
-      placed = false
-      tryPlace()
-      return
-    }
-    if (!root.contains(block)) placed = place(root)
-  })
-  const waitObserver = new MutationObserver(() => tryPlace())
-  waitObserver.observe(document.body, { childList: true, subtree: true })
-  tryPlace()
-  void poll()
-
-  return () => {
-    alive = false
-    if (pollTimer !== null) clearTimeout(pollTimer)
-    waitObserver.disconnect()
-    rootObserver.disconnect()
-    block.remove()
+    return React.createElement(
+      'div', { className: 'ts-dock' },
+      React.createElement(
+        'div', { className: 'ts-dock-panel', 'data-open': open ? 'true' : 'false' },
+        React.createElement(
+          'button',
+          { type: 'button', className: 'ts-dock-head', onClick: () => setOpen(!open) },
+          React.createElement('span', { className: 'ts-dock-chevron' }, '▾'),
+          React.createElement('span', { className: 'ts-dock-title' }, '思考总结'),
+          React.createElement(
+            'span', { className: 'ts-dock-progress' },
+            active
+              ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
+              : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
+          ),
+          active ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
+          refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined', style: { fontSize: 11 } }, refinedCount + ' 段已精炼') : null,
+        ),
+        open
+          ? React.createElement(
+              'div', { className: 'ts-dock-body' },
+              think.segments.length > 0
+                ? segEls
+                : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考，达到段窗口后逐段出摘要…'),
+            )
+          : null,
+      ),
+    )
   }
 }
 
@@ -751,16 +608,17 @@ export function apply(ctx) {
       { name: 'conversation.chat.turnTail', select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn.turn } : null) },
       makeThinkTail(),
     ))
-    // 3) 侧边栏"思考总结"面板（按每次思考分组，初始即显示）
-    if (typeof document !== 'undefined') {
-      if (!document.querySelector('style[data-dsh-thinksummary-css]')) {
-        const style = document.createElement('style')
-        style.dataset.dshThinksummaryCss = ''
-        style.textContent = PANEL_CSS
-        document.head.appendChild(style)
-      }
-      const disposer = mountSidebarPanel()
-      ctx.effect?.(() => disposer)
+    // 3) 输入框上方实时面板（配合输入框样式；只显示当前思考）
+    ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
+      { name: 'conversation.input.dock', id: 'think-summary.dock', order: 1 },
+      makeInputDock(),
+    ))
+    // 4) 样式注入
+    if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-thinksummary-css]')) {
+      const style = document.createElement('style')
+      style.dataset.dshThinksummaryCss = ''
+      style.textContent = PANEL_CSS
+      document.head.appendChild(style)
     }
   } catch (error) {
     // web shell 会因 apply 抛错而启动失败：外部插件必须吞掉
