@@ -3,8 +3,9 @@
 > DSH（Cordis 架构）插件：**长思考链分段总结** —— 检测模型的长思考，边思考边分段，
 > 逐段产出摘要并实时展示在聊天区，附带设置页。
 
-- 详细设计：[`design.md`](./design.md)
-- 运行时探测结论：[`probe-notes.md`](./probe-notes.md)
+- 详细设计：[`docs/design.md`](./docs/design.md)
+- 运行时探测结论：[`docs/probe-notes.md`](./docs/probe-notes.md)
+- 分段算法优化设计：[`docs/segment-optimization.md`](./docs/segment-optimization.md)
 
 ---
 
@@ -130,7 +131,7 @@ node scripts/seg-check.mjs   # 分段算法回归（围栏原子/表格整体/�
 （`/api/dsh-web-ui-settings`）也只认家族插件清单 —— **独立第三方插件的设置卡片
 必须自建 loopback 设置桥**。本插件已实现：`POST /api/think-summary/settings/describe|mutate`
 （宿主直连 settings 服务、revision 围栏），客户端用迷你 scope 控制器读写，不依赖
-web-ui 组。完整调查过程见 `probe-notes.md` §6。
+web-ui 组。完整调查过程见 `docs/probe-notes.md` §6。
 
 ## 里程碑
 

@@ -12,3 +12,7 @@ pnpm-lock.yaml
 
 # logs
 *.log
+
+# temp (commit message drafts etc.)
+*.tmp
+COMMIT_MSG*

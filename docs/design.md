@@ -99,7 +99,7 @@
 - **双阈值**：
   - `segmentMinTokens = 1500`：达到后可切（等待语义边界信号）；
   - `segmentMaxTokens = 3000`：硬上限，到点强制切，保证缓冲有界（切点**回溯到最近句末/行末**，不在句中/词中切）。
-- **Markdown 结构感知**（v0.2，详见 `docs/segment-optimization.md`）：
+- **Markdown 结构感知**（v0.2，详见 `segment-optimization.md`）：
   - 围栏状态机：围栏**内不做任何边界测试**（`- 列表`、`### 标题`、`Step 1` 等代码内容不会误切）；代码块整体原子（max 超限只在围栏边界切，纯代码段在代码行间切）；
   - 表格整体原子（表头+分隔行+行，max 超限只在行边界切）；列表只按**项边界**切（无序/有序/任务项）；
   - 边界信号（达最小窗口后，切在**行前**、边界行进下一段）：标题、无序/有序/任务列表项、引用、分隔线、**行首结构词**（`其次 / 接下来 / 然后 / Finally / Second / Step N`）；
@@ -225,9 +225,12 @@ dsh-think-summary/
 │   │   ├── rpc.ts        # 双传输：webServer 路由 + harness.handle
 │   │   └── fallback.ts   # session/event 事后兜底
 │   └── client/
-│       └── index.js      # web 客户端（纯 JS）：设置卡片 + 实时面板
-├── design.md
-├── probe-notes.md
+│       ├── index.js      # 入口（apply/slots 组装）
+│       ├── settings.js   # 设置卡片（自建 loopback 桥）
+│       ├── dock.js       # 输入框上方实时面板
+│       ├── tail.js       # 聊天流内思考总结条
+│       └── styles.js     # 样式（原生 token）
+├── docs/                 # 文档（design / probe-notes / segment-optimization）
 └── README.md
 ```
 
