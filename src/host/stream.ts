@@ -114,8 +114,8 @@ export function installDetect(
           store.endThink(key, think.id)
         }
       } catch (err) {
-        // 内部异常绝不冒泡到主请求（design §8.1）；取消该会话未完成精炼
-        refine?.cancelSession(key)
+        // 内部异常绝不冒泡到主请求（design §8.1）；只取消本次思考未完成的精炼
+        refine?.cancelThink(key, think.id)
         store.endThink(key, think.id)
         throw err
       }

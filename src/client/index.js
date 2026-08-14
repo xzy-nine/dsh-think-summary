@@ -34,7 +34,7 @@ const T = {
 
 /** 样式（注入一次 <style>；dock 面板配合输入框样式：input-major 背景 + 圆角 + dock 宽度公式）。 */
 const PANEL_CSS = `
-.ts-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);padding:0 var(--dsh-composer-dock-inset);flex:none}
+.ts-dock{flex:none;width:100%;max-width:var(--dsh-composer-card-max-width);margin:0 auto}
 .ts-dock-panel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);box-shadow:var(--dsw-shadow-lv1);border-radius:12px;width:100%;overflow:hidden}
 .ts-dock-head{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:transparent;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px 12px;display:flex;transition:background-color 120ms ease}
 .ts-dock-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -43,7 +43,7 @@ const PANEL_CSS = `
 .ts-dock-title{color:var(--dsw-alias-label-primary);flex:none;font-size:13px;font-weight:500;line-height:24px}
 .ts-dock-progress{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:auto;font-size:13px;line-height:20px;overflow:hidden}
 .ts-dock-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-state-warn-primary)}
-.ts-dock-body{flex-direction:column;max-height:240px;padding:2px 0;display:flex;overflow-y:auto}
+.ts-dock-body{flex-direction:column;max-height:220px;padding:2px 0;display:flex;overflow-y:auto}
 .ts-dock-seg{padding:6px 12px 6px 24px}
 .ts-dock-seg + .ts-dock-seg{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}
 .ts-dock-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
@@ -58,7 +58,7 @@ const PANEL_CSS = `
 .ts-tail-title{font-weight:600}
 .ts-tail-meta{flex:1;color:var(--dsw-alias-label-tertiary);font-size:11px}
 .ts-tail-refined{color:var(--dsw-alias-state-business-primary);font-size:11px}
-.ts-tail-body{border-top:1px solid var(--dsw-alias-separator-primary)}
+.ts-tail-body{border-top:1px solid var(--dsw-alias-separator-primary);max-height:320px;overflow-y:auto}
 .ts-tail-seg{padding:6px 10px 6px 26px}
 .ts-tail-seg + .ts-tail-seg{border-top:1px solid var(--dsw-alias-separator-primary)}
 .ts-tail-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
@@ -532,33 +532,29 @@ function makeInputDock() {
       }
     }, [sessionId])
 
-    // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（短暂保留后隐藏）
+    // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（常驻显示最近一次）
     let think = null
-    let fresh = false
-    if (state) {
-      think = state.thinks.find((t) => t.active) || null
-      if (!think && state.thinks.length > 0) {
-        const last = state.thinks[state.thinks.length - 1]
-        fresh = Date.now() - (state.updatedAt || 0) < 8000
-        if (fresh) think = last
-      }
+    if (state && state.thinks && state.thinks.length > 0) {
+      think = state.thinks.find((t) => t.active) || state.thinks[state.thinks.length - 1]
     }
-    // 无当前思考 → 不渲染
-    if (!think) return null
-    const active = think.active
 
-    const refinedCount = think.segments.filter((s) => s.refined).length
-    const segEls = think.segments.map((s) =>
-      React.createElement(
-        'div', { key: s.index, className: 'ts-dock-seg' },
-        React.createElement(
-          'div', { className: 'ts-dock-seg-head' },
-          React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
-          s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
-        ),
-        React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
-      ),
-    )
+    // 常驻显示：无当前思考时显示空闲态（等待思考…），有思考时显示该次思考的摘要
+    const active = think ? think.active : false
+    const refinedCount = think ? think.segments.filter((s) => s.refined).length : 0
+
+    const segEls = think
+      ? think.segments.map((s) =>
+          React.createElement(
+            'div', { key: s.index, className: 'ts-dock-seg' },
+            React.createElement(
+              'div', { className: 'ts-dock-seg-head' },
+              React.createElement('span', null, '第' + (s.index + 1) + '段 · ' + fmtTok(s.tokens) + ' tok'),
+              s.refined ? React.createElement('span', { className: 'ts-seg-refined' }, '已精炼') : null,
+            ),
+            React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),
+          ),
+        )
+      : []
 
     return React.createElement(
       'div', { className: 'ts-dock' },
@@ -571,9 +567,11 @@ function makeInputDock() {
           React.createElement('span', { className: 'ts-dock-title' }, '思考总结'),
           React.createElement(
             'span', { className: 'ts-dock-progress' },
-            active
-              ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
-              : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
+            think === null
+              ? '等待思考…'
+              : active
+                ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
+                : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
           ),
           active ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
           refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined', style: { fontSize: 11 } }, refinedCount + ' 段已精炼') : null,
@@ -581,9 +579,11 @@ function makeInputDock() {
         open
           ? React.createElement(
               'div', { className: 'ts-dock-body' },
-              think.segments.length > 0
-                ? segEls
-                : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考，达到段窗口后逐段出摘要…'),
+              think === null
+                ? React.createElement('div', { className: 'ts-dock-placeholder' }, '等待模型思考，超阈值后开始分段总结…')
+                : think.segments.length > 0
+                  ? segEls
+                  : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考，达到段窗口后逐段出摘要…'),
             )
           : null,
       ),

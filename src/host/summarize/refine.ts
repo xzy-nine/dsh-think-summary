@@ -40,6 +40,15 @@ export interface RefineApply {
   (sessionId: string, thinkId: string, segmentIndex: number, refinedSummary: string): void
 }
 
+/** 在途任务控制器：携带归属，供按 (session, think) 精确取消。 */
+interface Controller {
+  sessionId: string
+  thinkId: string
+  aborted?: boolean
+  abort: () => void
+  signal?: AbortSignal
+}
+
 /** 固定提示词模板（一次写好，不随内容增长）。 */
 const PROMPT_SYSTEM =
   '你是思考链分段摘要器。用不超过60个字总结给定思考片段的核心内容与结论，只输出总结本身，不要任何前缀或解释。'
@@ -93,7 +102,7 @@ export async function resolveModel(
 export class RefineQueue {
   private queue: RefineTask[] = []
   private running = false
-  private readonly controllers = new Set<{ aborted?: boolean; abort: () => void }>()
+  private readonly controllers = new Set<Controller>()
   private readonly getOptions: () => RefineOptions
   private readonly getLlm: () => LlmLike | undefined
   private readonly apply: RefineApply
@@ -117,10 +126,16 @@ export class RefineQueue {
     return true
   }
 
-  /** 取消某会话的未完成任务与在途任务（主流 error/abort 时调用）。 */
-  cancelSession(sessionId: string): void {
-    this.queue = this.queue.filter((t) => t.sessionId !== sessionId)
-    for (const c of this.controllers) c.abort()
+  /**
+   * 按 (会话, think) 精确取消：只清该次思考的排队任务，只中止该次思考的在途调用。
+   * 修复：旧版 cancelSession 会把**所有在途任务**中止并清掉整个会话的排队任务——
+   * 新思考的流中止（如用户停止）会打断旧思考仍未完成的精炼，导致部分段不精炼。
+   */
+  cancelThink(sessionId: string, thinkId: string): void {
+    this.queue = this.queue.filter((t) => !(t.sessionId === sessionId && t.thinkId === thinkId))
+    for (const c of this.controllers) {
+      if (c.sessionId === sessionId && c.thinkId === thinkId) c.abort()
+    }
   }
 
   get pending(): number {
@@ -144,9 +159,17 @@ export class RefineQueue {
   private async runOne(task: RefineTask): Promise<void> {
     const o = this.getOptions()
     const llm = this.getLlm()
-    if (!llm || typeof llm.stream !== 'function') return // 启发式保留
-    const controller: { aborted?: boolean; abort: () => void; signal?: AbortSignal } =
-      typeof AbortController !== 'undefined' ? new AbortController() : { aborted: false, abort() {} }
+    if (!llm || typeof llm.stream !== 'function') {
+      // eslint-disable-next-line no-console
+      console.error('[dsh-think-summary] refine skipped: llm service unavailable', task.sessionId, task.thinkId, task.segmentIndex)
+      return // 启发式保留
+    }
+    const controller: Controller = { sessionId: task.sessionId, thinkId: task.thinkId, abort: () => undefined }
+    if (typeof AbortController !== 'undefined') {
+      const ac = new AbortController()
+      controller.abort = () => ac.abort()
+      controller.signal = ac.signal
+    }
     this.controllers.add(controller)
     try {
       const model =
