@@ -55,24 +55,8 @@ export function installDetect(
         canCut: () => detector.inSplice,
         codeMode: opts.codeBlockMode === 'ignore' ? 'ignore' : 'keep',
         tableMode: opts.tableMode === 'ignore' ? 'ignore' : 'keep',
-        onMeta: (info) => {
-          // 忽略模式：代码块/表格内容不写缓冲，围栏闭/表格结束时产出极简元信息段
-          const summary =
-            info.kind === 'code'
-              ? '代码块 · ' + (info.lang ? info.lang + ' · ' : '') + '约 ' + info.lines + ' 行'
-              : '表格 · 约 ' + info.lines + ' 行'
-          const h = hashText('meta:' + summary)
-          if (state.hashes.has(h)) return
-          state.hashes.add(h)
-          store.pushSegment(state, think.id, {
-            index: think.segments.length,
-            summary,
-            tokens: 0,
-            refined: false,
-            skipReason: info.kind,
-            ts: Date.now(),
-          })
-        },
+        // 不传 onMeta：ignore 模式下代码块/表格内容丢弃即可，总结卡片不显示任何
+        // 代码块/表格痕迹（用户需求：改为不显示；keep 模式走下方 sink 产出内容段）
       },
       (text: string, tokens: number, meta) => {
         // 门控保证 cut 只发生在 inSplice 之后；state 级去重防重试/重放

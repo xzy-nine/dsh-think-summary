@@ -1,9 +1,10 @@
 /**
  * 样式（apply 时注入一次 <style>）。
- * dock 面板配合输入框样式：input-major 背景 + 圆角 + 宽度对齐 composer 卡片。
+ * dock 面板宽度对齐**聊天输出文字区域**（与 goal/todo 卡片同一公式：
+ * 100% - 2×side-clearance - 4×dock-inset，即输入框卡片内收的宽度）。
  */
 const PANEL_CSS = `
-.ts-dock{flex:none;width:100%;max-width:var(--dsh-composer-card-max-width);margin:0 auto}
+.ts-dock{box-sizing:border-box;flex:none;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto}
 .ts-dock-panel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);box-shadow:var(--dsw-shadow-lv1);border-radius:12px;width:100%;overflow:hidden}
 .ts-dock-head{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:transparent;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px 12px;display:flex;transition:background-color 120ms ease}
 .ts-dock-head:hover{background:var(--dsw-alias-interactive-bg-hover)}

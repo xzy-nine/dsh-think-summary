@@ -80,12 +80,16 @@ export function installFallback(
         const entry = buf.get(k)
         buf.delete(k)
         const { state } = store.ensureThink(sid, `t${turn}`)
-        // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配；
-        // 该步的 llm/stream 刚结束，最新 think 即此步思考）
-        const latest = state.thinks[state.thinks.length - 1]
-        if (latest && latest.id.startsWith('s') && !latest.active && latest.turn === undefined) {
-          latest.turn = turn
-          latest.step = step
+        // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配）。
+        // 注意：ensureThink 可能刚把 tN 兜底 think push 到数组尾部，不能只取最后一项；
+        // 从后往前找"最后一个 s 开头、非活跃、未打标"的 think（该步 llm/stream 刚结束）。
+        for (let i = state.thinks.length - 1; i >= 0; i--) {
+          const t = state.thinks[i]
+          if (t && t.id.startsWith('s') && !t.active && t.turn === undefined) {
+            t.turn = turn
+            t.step = step
+            break
+          }
         }
         if (!entry || entry.text.length === 0) return
         const thinkKey = `t${turn}`
@@ -99,14 +103,19 @@ export function installFallback(
             segmentMaxTokens: opts.segmentMaxTokens,
           },
           {
-            skipCode: opts.codeBlockMode === 'keep-skip',
-            skipTable: opts.tableMode === 'keep-skip',
+            // ignore / keep-skip 都不精炼代码/表格段（keep-refine 才精炼）；
+            // 兜底路径处理完整文本，无法"不写内存"，但保持与流式一致的精炼决策
+            skipCode: opts.codeBlockMode !== 'keep-refine',
+            skipTable: opts.tableMode !== 'keep-refine',
           },
         )
         if (outcomes.length === 0) return
         const model = defaultModel?.() ?? { provider: '', model: '' }
         const base = think.segments.length
         for (const o of outcomes) {
+          // ignore 模式：代码块/表格段不显示（与流式一致——总结卡片无痕迹）
+          if (o.skipReason === 'code' && opts.codeBlockMode === 'ignore') continue
+          if (o.skipReason === 'table' && opts.tableMode === 'ignore') continue
           const idx = base + o.index
           store.pushSegment(state, thinkKey, {
             index: idx,

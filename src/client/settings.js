@@ -26,7 +26,7 @@ const FIELD_GROUPS = [
           ['keep-skip', '保留 + 跳过精炼'],
           ['keep-refine', '保留并精炼'],
         ],
-        hint: '忽略：代码内容不进内存、不精炼（省 token/内存），只留"代码块 · N 行"元信息',
+        hint: '忽略：代码内容不进内存、不精炼（省 token/内存），总结卡片不显示代码块痕迹',
       },
       {
         key: 'tableMode', label: '表格处理', kind: 'enum',
@@ -35,7 +35,7 @@ const FIELD_GROUPS = [
           ['keep-skip', '保留 + 跳过精炼'],
           ['keep-refine', '保留并精炼'],
         ],
-        hint: '忽略：表格内容不进内存、不精炼，只留"表格 · N 行"元信息',
+        hint: '忽略：表格内容不进内存、不精炼，总结卡片不显示表格痕迹',
       },
       {
         key: 'refineTrim', label: '精炼输入裁剪', kind: 'enum',
