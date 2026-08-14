@@ -12,6 +12,11 @@ import { countRaw, estimateTokens, type RawCount } from './detect.js'
 export interface SegmentOptions {
   segmentMinTokens?: number
   segmentMaxTokens?: number
+  /**
+   * 切段门控：返回 false 时不切（继续缓冲）。用于"阈值后才开始分段"——
+   * 阈值前的缓冲会保留，首个切段包含阈值前的思考文本（不再整体丢弃）。
+   */
+  canCut?: () => boolean
 }
 
 export interface SegmentSink {
@@ -45,6 +50,7 @@ export class Segmenter {
   private other = 0
   private readonly min: number
   private readonly max: number
+  private readonly canCut: (() => boolean) | undefined
   private readonly emit: (text: string, tokens: number) => void
   private lastHash = ''
   /** 上次边界检查位置：只测最近追加的尾部（自上一个 \n 起），避免命中陈旧结构词。 */
@@ -53,6 +59,7 @@ export class Segmenter {
   constructor(options: SegmentOptions = {}, sink: SegmentSink | ((text: string, tokens: number) => void)) {
     this.min = options.segmentMinTokens ?? 1500
     this.max = options.segmentMaxTokens ?? 3000
+    this.canCut = options.canCut
     this.emit = typeof sink === 'function' ? sink : (text, tokens) => sink.onSegment(text, tokens)
   }
 
@@ -67,10 +74,12 @@ export class Segmenter {
     const raw = countRaw(text)
     this.cjk += raw.cjk
     this.other += raw.other
-    const t = this.tokenCount()
-    if (t >= this.min) {
-      const tail = this.buf.slice(this.tailFrom)
-      if (t >= this.max || STRONG_BOUNDARY.test(tail)) this.cut()
+    if (this.canCut === undefined || this.canCut()) {
+      const t = this.tokenCount()
+      if (t >= this.min) {
+        const tail = this.buf.slice(this.tailFrom)
+        if (t >= this.max || STRONG_BOUNDARY.test(tail)) this.cut()
+      }
     }
     this.tailFrom = this.buf.lastIndexOf('\n') + 1
     return raw
@@ -78,11 +87,13 @@ export class Segmenter {
 
   /** 外部强边界（blockType 从 reasoning 切换）：需达最小窗口。 */
   signalBoundary(): void {
+    if (this.canCut !== undefined && !this.canCut()) return
     if (this.tokenCount() >= this.min) this.cut()
   }
 
-  /** 流结束：flush 末尾段（低于下限则丢弃）。 */
+  /** 流结束：flush 末尾段（低于下限则丢弃；未达门控不切）。 */
   flush(): void {
+    if (this.canCut !== undefined && !this.canCut()) return
     if (this.tokenCount() >= MIN_SEGMENT_FLOOR) this.cut()
   }
 

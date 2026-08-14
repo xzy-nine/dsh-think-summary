@@ -25,6 +25,8 @@ export interface RefineOptions {
 
 export interface RefineTask {
   sessionId: string
+  /** 所属 think（每次思考分组）。 */
+  thinkId: string
   segmentIndex: number
   /** 段全文（内部裁剪尾部喂入）。 */
   text: string
@@ -35,7 +37,7 @@ export interface RefineTask {
 }
 
 export interface RefineApply {
-  (sessionId: string, segmentIndex: number, refinedSummary: string): void
+  (sessionId: string, thinkId: string, segmentIndex: number, refinedSummary: string): void
 }
 
 /** 固定提示词模板（一次写好，不随内容增长）。 */
@@ -152,9 +154,19 @@ export class RefineQueue {
           ? o.model
           : await resolveModel(llm, task.provider, task.fallbackModel)
       const out = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, controller.signal)
-      if (out && out.length > 0) this.apply(task.sessionId, task.segmentIndex, out)
-    } catch {
-      /* 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求 */
+      if (out && out.length > 0) this.apply(task.sessionId, task.thinkId, task.segmentIndex, out)
+    } catch (error) {
+      // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求；
+      // 记录失败便于排查"未精炼"的段
+      // eslint-disable-next-line no-console
+      console.error(
+        '[dsh-think-summary] refine failed:',
+        task.sessionId,
+        task.thinkId,
+        'seg',
+        task.segmentIndex,
+        error instanceof Error ? error.message : String(error),
+      )
     } finally {
       this.controllers.delete(controller)
     }

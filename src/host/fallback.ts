@@ -1,16 +1,18 @@
 import type { ThinkStateStore } from './state.js'
 import { estimateTokens } from './detect.js'
 import { processThinking } from './pipeline.js'
+import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
 import type { CtxLike } from './ctx.js'
 
 /**
- * M2 事后兜底路径（design.md §4.3.3）：
+ * M2 事后兜底路径（design.md §4.3.3，v2）：
  *  - assistant/chunk 事件按 sessionId+turn+step 累积 reasoning-delta 文本
- *    （与实时流同构），缓冲设上限
  *  - assistant/message（每步终态）时，若实时路径未产出（断流/异常/错过），
- *    对该步文本补跑分段+启发式总结，**追加**进会话状态；thinkingTokens 累计，
- *    达到阈值才置 inSplice
+ *    对该步文本补跑分段+启发式总结，**追加**进"该 turn 的 think"；
+ *    **兜底路径的分段同样入队精炼**（补齐精炼全链路）
+ *  - 精炼模型来源：会话默认模型（agentDefaultModel.currentSelection()），
+ *    实时请求的 provider 在兜底事件里不可得
  *  - 缓冲按年龄清理；全程 try/catch，绝不冒泡；配置经 getOptions 读取
  */
 interface BufEntry {
@@ -21,10 +23,17 @@ interface BufEntry {
 const BUF_CAP_CHARS = 200_000
 const BUF_TTL_MS = 10 * 60 * 1000
 
+export interface DefaultModel {
+  provider: string
+  model: string
+}
+
 export function installFallback(
   ctx: CtxLike,
   store: ThinkStateStore,
   getOptions: () => ThinkSummaryConfig,
+  refine?: RefineQueue | null,
+  defaultModel?: () => DefaultModel,
 ) {
   const buf = new Map<string, BufEntry>()
 
@@ -71,16 +80,42 @@ export function installFallback(
         const entry = buf.get(k)
         buf.delete(k)
         if (!entry || entry.text.length === 0) return
-        const s = store.ensure(sid)
-        // 实时路径已产出分段则跳过（inSplice 已由实时路径置位）
-        if (s.inSplice && s.segments.length > 0) return
-        const outcomes = processThinking(entry.text)
+        const thinkKey = `t${turn}`
+        const { state, think } = store.ensureThink(sid, thinkKey)
+        // 实时路径已产出分段则跳过（该 think 已由实时路径置位 inSplice）
+        if (state.inSplice && think.segments.length > 0) return
+        const outcomes = processThinking(entry.text, {
+          segmentMinTokens: opts.segmentMinTokens,
+          segmentMaxTokens: opts.segmentMaxTokens,
+        })
         if (outcomes.length === 0) return
-        const base = s.segments.length
-        for (const o of outcomes) s.segments.push({ ...o, index: base + o.index })
-        s.thinkingTokens += estimateTokens(entry.text)
-        if (s.thinkingTokens >= threshold) s.inSplice = true
-        s.updatedAt = Date.now()
+        const model = defaultModel?.() ?? { provider: '', model: '' }
+        const base = think.segments.length
+        for (const o of outcomes) {
+          const idx = base + o.index
+          store.pushSegment(state, thinkKey, {
+            index: idx,
+            summary: o.summary,
+            tokens: o.tokens,
+            refined: false,
+            ts: o.ts,
+          })
+          // 兜底路径分段同样精炼（若默认模型可解析）
+          if (refine) {
+            refine.enqueue({
+              sessionId: sid,
+              thinkId: thinkKey,
+              segmentIndex: idx,
+              text: o.text,
+              provider: model.provider || 'unknown',
+              fallbackModel: model.model || '',
+            })
+          }
+        }
+        think.tokens += estimateTokens(entry.text)
+        state.thinkingTokens = think.tokens
+        if (state.thinkingTokens >= threshold) state.inSplice = true
+        state.updatedAt = Date.now()
       }
     } catch {
       /* 兜底失败仅影响本段，不影响会话。 */

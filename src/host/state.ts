@@ -1,7 +1,8 @@
 /**
- * M2 状态存储：会话级内存态（sessionId 键控），只存标量/自有 JSON。
+ * 状态存储（v2）：会话级 + "每次思考"分组。
  * 说明：流上无法获得 turn（探测确认 GenerateOptions 无 turn 字段），
- * 故采用"会话级 + TTL 清理"替代设计稿的 sessionId+turn 键控（见 design.md §4.4 修正）。
+ * 实时路径以"每次 llm/stream 调用"为一个 think（id: s<序号>），
+ * 兜底路径以 turn 为一个 think（id: t<turn>）；客户端按 think 分组折叠展示。
  */
 
 export interface SegmentSummary {
@@ -12,71 +13,106 @@ export interface SegmentSummary {
   ts: number
 }
 
+export interface ThinkGroup {
+  /** think 唯一 id：实时 s<序号> / 兜底 t<turn>。 */
+  id: string
+  active: boolean
+  /** 该次思考累计 token。 */
+  tokens: number
+  startedAt: number
+  segments: SegmentSummary[]
+}
+
 export interface ThinkState {
   sessionId: string
+  /** 是否有活跃思考。 */
   active: boolean
-  thinkingTokens: number
+  /** 当前思考是否已判定长思考。 */
   inSplice: boolean
-  segments: SegmentSummary[]
+  /** 当前思考的 token 数（进度头用）。 */
+  thinkingTokens: number
   updatedAt: number
-  /** 内部去重集合；view() 时剥离，不对外。 */
+  thinks: ThinkGroup[]
+  /** 内部去重集合；view() 时剥离。 */
   hashes: Set<string>
+  /** think 序号（s<序号> 分配）。 */
+  nextThinkId: number
 }
 
 const TTL_MS = 10 * 60 * 1000
 
 export class ThinkStateStore {
   private map = new Map<string, ThinkState>()
+  /** 最近活跃会话（侧边栏面板缺省 sessionId 时使用）。 */
+  private lastActiveSessionId: string | undefined
 
   get(sessionId: string): ThinkState | undefined {
     return this.map.get(sessionId)
   }
 
-  /** 流开始：取或建（不重置——多步同会话连续流共享状态）。 */
-  begin(sessionId: string): ThinkState {
-    let s = this.map.get(sessionId)
-    if (!s) {
-      s = {
-        sessionId,
-        active: true,
-        thinkingTokens: 0,
-        inSplice: false,
-        segments: [],
-        updatedAt: Date.now(),
-        hashes: new Set(),
-      }
-      this.map.set(sessionId, s)
+  private create(sessionId: string): ThinkState {
+    const s: ThinkState = {
+      sessionId,
+      active: false,
+      inSplice: false,
+      thinkingTokens: 0,
+      updatedAt: Date.now(),
+      thinks: [],
+      hashes: new Set(),
+      nextThinkId: 1,
     }
+    this.map.set(sessionId, s)
+    return s
+  }
+
+  /** 实时路径：开始一次新思考（每次 llm/stream 调用 = 一个新 think）。 */
+  beginThink(sessionId: string): { state: ThinkState; think: ThinkGroup } {
+    let s = this.map.get(sessionId)
+    if (!s) s = this.create(sessionId)
+    const think: ThinkGroup = {
+      id: `s${s.nextThinkId++}`,
+      active: true,
+      tokens: 0,
+      startedAt: Date.now(),
+      segments: [],
+    }
+    s.thinks.push(think)
     s.active = true
+    s.inSplice = false
+    s.thinkingTokens = 0
     s.updatedAt = Date.now()
-    return s
+    this.lastActiveSessionId = sessionId
+    return { state: s, think }
   }
 
-  /** 兜底路径使用：取或建，但保持 active=false（非流上下文）。 */
-  ensure(sessionId: string): ThinkState {
+  /** 兜底路径：取或建一个按 key 键控的 think（保持 active=false）。 */
+  ensureThink(sessionId: string, thinkId: string): { state: ThinkState; think: ThinkGroup } {
     let s = this.map.get(sessionId)
-    if (!s) {
-      s = {
-        sessionId,
-        active: false,
-        thinkingTokens: 0,
-        inSplice: false,
-        segments: [],
-        updatedAt: Date.now(),
-        hashes: new Set(),
-      }
-      this.map.set(sessionId, s)
+    if (!s) s = this.create(sessionId)
+    let think = s.thinks.find((t) => t.id === thinkId)
+    if (!think) {
+      think = { id: thinkId, active: false, tokens: 0, startedAt: Date.now(), segments: [] }
+      s.thinks.push(think)
     }
-    return s
+    return { state: s, think }
   }
 
-  /** 流结束（finish/error/abort）。 */
-  end(sessionId: string): void {
+  /** 流结束：结束指定 think 并刷新会话活跃态。 */
+  endThink(sessionId: string, thinkId: string): void {
     const s = this.get(sessionId)
-    if (s) {
-      s.active = false
-      s.updatedAt = Date.now()
-    }
+    if (!s) return
+    const think = s.thinks.find((t) => t.id === thinkId)
+    if (think) think.active = false
+    s.active = s.thinks.some((t) => t.active)
+    s.updatedAt = Date.now()
+  }
+
+  /** 推入一个分段到指定 think。 */
+  pushSegment(state: ThinkState, thinkId: string, segment: SegmentSummary): void {
+    const think = state.thinks.find((t) => t.id === thinkId)
+    if (!think) return
+    think.segments.push(segment)
+    state.updatedAt = Date.now()
   }
 
   /** 过期清理（空闲超过 TTL）；返回移除数。 */
@@ -91,17 +127,21 @@ export class ThinkStateStore {
     return removed
   }
 
-  /** 供 Client 轮询的纯 JSON 视图（剥离内部 hashes）。 */
-  view(sessionId: string): Omit<ThinkState, 'hashes'> | undefined {
+  /** 供 Client 轮询的纯 JSON 视图（剥离内部 hashes/nextThinkId）。 */
+  view(sessionId: string): Omit<ThinkState, 'hashes' | 'nextThinkId'> | undefined {
     const s = this.get(sessionId)
     if (!s) return undefined
     return {
       sessionId: s.sessionId,
       active: s.active,
-      thinkingTokens: s.thinkingTokens,
       inSplice: s.inSplice,
-      segments: s.segments.slice(),
+      thinkingTokens: s.thinkingTokens,
       updatedAt: s.updatedAt,
+      thinks: s.thinks.map((t) => ({ ...t, segments: t.segments.slice() })),
     }
+  }
+
+  get lastActive(): string | undefined {
+    return this.lastActiveSessionId
   }
 }

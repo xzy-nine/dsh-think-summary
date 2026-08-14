@@ -46,10 +46,11 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   const refine = new RefineQueue(
     () => getConfig(),
     () => ctx.get('llm') as LlmLike | undefined,
-    (sessionId, segmentIndex, refinedSummary) => {
+    (sessionId, thinkId, segmentIndex, refinedSummary) => {
       const s = store.get(sessionId)
-      const seg = s?.segments[segmentIndex]
-      if (seg) {
+      const think = s?.thinks.find((t) => t.id === thinkId)
+      const seg = think?.segments[segmentIndex]
+      if (seg && s) {
         seg.summary = refinedSummary
         seg.refined = true
         s.updatedAt = Date.now()
@@ -57,10 +58,22 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
     },
   )
 
+  // 兜底路径精炼用的默认模型（实时请求的 provider 在 session/event 里不可得）
+  const defaultModel = () => {
+    try {
+      const sel = (ctx.get('agentDefaultModel') as
+        | { currentSelection?: () => { provider?: string; model?: string } }
+        | undefined)?.currentSelection?.()
+      return { provider: sel?.provider ?? '', model: sel?.model ?? '' }
+    } catch {
+      return { provider: '', model: '' }
+    }
+  }
+
   installDetect(ctx, store, () => getConfig(), refine)
   installRpc(ctx, store)
   installSettingsRpc(ctx, store)
-  installFallback(ctx, store, () => getConfig())
+  installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 
   installSettingsSection(ctx as never, NS, Config, resolveConfig(config), {
     setSource: (source: unknown) => {

@@ -1,19 +1,23 @@
 /**
  * dsh-think-summary web client（纯 JS，由 scripts/build-client.mjs 打包为
  * ModuleLoader bundle）。不依赖 JSX/TS——React 来自 bundle 包裹层的
- * `require("react")`，经 react 自由变量使用。
+ * `require("react")`；侧边栏面板用纯 DOM 注入（shell 无外部可注册的
+ * 侧边栏槽位，遵循 dsh-ssh / task-board 的 DOM 扩展先例）。
  *
  * 职责：
- *  1. settings.plugin.item 设置卡片：编辑 think-summary 配置（自建设置桥）
- *  2. conversation.input.dock 实时面板：轮询 /api/think-summary/state 展示分段摘要
+ *  1. settings.plugin.item 设置卡片（自建设置桥，默认折叠）
+ *  2. 侧边栏"思考总结"入口 + 可折叠卡片：按每次思考分组，组内可折叠；
+ *     思考一开始即显示（不等阈值），实时滚动分段摘要
  *
- * 视觉：全部走 dsh 主题变量（--dsw-alias-*，带降级色），与官方 UI 一致。
  * 失败策略：任何 DOM/网络异常只记录，绝不向上抛（web shell 会因插件 apply
  * 抛错而整个启动失败）。
  */
 const NS = 'think-summary'
 const STATE_ROUTE = '/api/think-summary/state'
 const SETTINGS_PREFIX = '/api/think-summary/settings'
+const KEEP_MS = 30000
+const POLL_MS = 1500
+const IDLE_POLL_MS = 5000
 
 /** 主题变量（带降级）。 */
 const T = {
@@ -27,6 +31,39 @@ const T = {
   err: 'var(--dsw-alias-danger-fill, #ff5f57)',
   warn: '#ffd60a',
 }
+
+/** 侧边栏面板样式（注入一次 <style>）。 */
+const PANEL_CSS = `
+.ts-block{margin:2px 8px 4px}
+.ts-entry{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:6px;background:transparent;border:none;color:${T.text};font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.ts-entry:hover,.ts-entry[data-active="true"]{background:${T.hover}}
+.ts-entry svg{flex:none;color:${T.dim}}
+.ts-card{border:1px solid ${T.border};border-radius:6px;background:${T.bg};margin-top:2px;overflow:hidden}
+.ts-card[hidden]{display:none}
+.ts-head{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid ${T.border};font-size:12px;color:${T.text}}
+.ts-dot{width:7px;height:7px;border-radius:50%;flex:none}
+.ts-head-tok{color:${T.dim};font-variant-numeric:tabular-nums}
+.ts-body{max-height:50vh;overflow:auto}
+.ts-think{border-bottom:1px solid ${T.border}}
+.ts-think:last-child{border-bottom:none}
+.ts-think-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;background:transparent;border:none;color:${T.text};font:inherit;font-size:12px;cursor:pointer;text-align:left}
+.ts-think-head:hover{background:${T.hover}}
+.ts-think-chevron{transition:transform .12s;color:${T.dim}}
+.ts-think[data-open="true"] .ts-think-chevron{transform:rotate(180deg)}
+.ts-think-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ts-think-meta{flex:none;color:${T.dim};font-size:10.5px;white-space:nowrap}
+.ts-think-status{flex:none;font-size:10.5px;white-space:nowrap}
+.ts-seg{display:flex;gap:8px;align-items:baseline;padding:3px 10px 3px 22px;font-size:12px}
+.ts-seg-num{flex:none;color:${T.dim};font-size:10.5px;min-width:16px;text-align:right}
+.ts-seg-sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${T.text}}
+.ts-seg-meta{flex:none;color:${T.dim};font-size:10.5px;white-space:nowrap}
+.ts-seg-refined{color:${T.accent}}
+.ts-placeholder{padding:6px 10px;font-size:12px;color:${T.dim}}
+`
+
+/** 入口图标（16px 导航图标观感）。 */
+const ENTRY_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5c-3 0-5.5 2.2-5.5 5 0 1.5.7 2.8 1.8 3.7-.2 1.2-.9 2.3-1.8 3.1 2.1-.2 3.8-1 5-2 1.8.4 3.7-.1 5-1.6.9-1 .7-1.4.9-2.6.4-1.5 1.2-2.6 1.2-2.6s-2.5 0-4.5-1.6C9.2 2.2 8.7 1.5 8 1.5z"/></svg>'
 
 /** 设置卡片字段定义（与 Host schema 对齐；分组渲染）。 */
 const FIELD_GROUPS = [
@@ -62,7 +99,7 @@ function fmtTok(n) {
   return k + 'k'
 }
 
-/** 通用小组件：开关（视觉 switch，实际是带 aria 的 button）。 */
+/** 开关（视觉 switch，实际是带 aria 的 button）。 */
 function makeToggle(on, onChange, disabled) {
   return React.createElement(
     'button',
@@ -87,7 +124,6 @@ function makeToggle(on, onChange, disabled) {
   )
 }
 
-/** 按钮。 */
 function makeButton(label, kind, onClick, disabled) {
   const primary = kind === 'primary'
   return React.createElement(
@@ -111,7 +147,6 @@ function makeButton(label, kind, onClick, disabled) {
 /**
  * 自建设置桥 scope（M4 部署修正）：官方设置桥只服务白名单命名空间，
  * web-ui 组桥接只认家族清单——独立第三方插件必须自带 loopback 设置桥。
- * 与官方 SettingsScope 同构：getSnapshot/subscribe/set/unset。
  */
 function createBridgeScope() {
   let snap = { status: 'loading', value: undefined, base: undefined, user: undefined, revision: undefined, writable: false }
@@ -181,7 +216,7 @@ function createBridgeScope() {
   }
 }
 
-/** 设置卡片：卡片化布局 + 分组字段 + 开关/单位/按钮/状态。 */
+/** 设置卡片：默认折叠，点头部展开；分组字段 + 开关/单位/按钮/状态。 */
 function makeSettingsCard(scope) {
   return function SettingsCard() {
     const [snap, setSnap] = React.useState(null)
@@ -190,7 +225,6 @@ function makeSettingsCard(scope) {
     const [msg, setMsg] = React.useState('')
     const [msgKind, setMsgKind] = React.useState('')
     const [seed, setSeed] = React.useState(0)
-    // 顶层折叠：与其他插件卡片一致，默认收起，点头部展开
     const [open, setOpen] = React.useState(false)
 
     React.useEffect(() => {
@@ -200,7 +234,6 @@ function makeSettingsCard(scope) {
       return () => { if (typeof un === 'function') un() }
     }, [])
 
-    // 快照变化（含保存后回读）时，若不在保存中则重新铺草稿
     React.useEffect(() => {
       if (snap && snap.status === 'ready' && !busy) {
         const v = snap.value || {}
@@ -349,7 +382,7 @@ function makeSettingsCard(scope) {
         React.createElement(
           'span', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 } },
           React.createElement('span', { style: titleStyle }, 'think-summary'),
-          React.createElement('span', { style: descStyle }, '长思考链检测、分段与逐段摘要 · 改动即时生效'),
+          React.createElement('span', { style: descStyle }, '长思考链分段总结 · 改动即时生效'),
         ),
         React.createElement('span', { style: chevron(open) }, '▾'),
       ),
@@ -373,96 +406,223 @@ function makeSettingsCard(scope) {
   }
 }
 
-/** 实时面板：轮询 Host 路由，展示思考进度与分段摘要（最近 MAX_VISIBLE 段）。 */
-const POLL_MS = 1500
-const IDLE_POLL_MS = 5000
-const IDLE_AFTER_MS = 30000
-const MAX_VISIBLE = 8
+/** 侧边栏"思考总结"：入口按钮 + 可折叠卡片（按每次思考分组，组内可折叠）。 */
+function mountSidebarPanel() {
+  const block = document.createElement('div')
+  block.className = 'ts-block'
+  block.dataset.dshThinksummaryBlock = ''
 
-function makePanel() {
-  return function ThinkPanel(props) {
-    const [state, setState] = React.useState(null)
-    const sessionId = props && props.sessionId
+  const entry = document.createElement('button')
+  entry.type = 'button'
+  entry.className = 'ts-entry'
+  entry.dataset.dshThinksummaryEntry = ''
+  entry.setAttribute('aria-label', '思考总结')
+  entry.innerHTML = ENTRY_ICON + '<span>思考总结</span>'
 
-    React.useEffect(() => {
-      if (!sessionId) return undefined
-      let alive = true
-      let timer = null
-      const poll = async () => {
-        let view = null
-        try {
-          const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
-          if (!res.ok) return
-          const json = await res.json()
-          if (!alive) return
-          view = (json && json.state) || null
-          setState(view)
-        } catch {
-          /* 轮询失败不影响聊天 */
-        } finally {
-          if (!alive) return
-          const idle = !view || (!view.active && Date.now() - (view.updatedAt || 0) >= IDLE_AFTER_MS)
-          timer = setTimeout(poll, idle ? IDLE_POLL_MS : POLL_MS)
-        }
-      }
-      void poll()
-      return () => { alive = false; if (timer !== null) clearTimeout(timer) }
-    }, [sessionId])
+  const card = document.createElement('div')
+  card.className = 'ts-card'
+  card.hidden = true
+  block.append(entry, card)
 
-    if (!state || !state.inSplice) return null
+  const expanded = new Set()
+  let cardOpen = false
+  let lastState = null
+  let alive = true
+  let pollTimer = null
 
-    const card = { border: '1px solid ' + T.border, borderRadius: 6, background: T.bg, overflow: 'hidden', color: T.text, fontSize: 12 }
-    const headerStyle = {
-      display: 'flex', alignItems: 'center', gap: 10, padding: '5px 10px',
-      borderBottom: '1px solid ' + T.border,
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag)
+    if (cls) node.className = cls
+    if (text !== undefined) node.textContent = text
+    return node
+  }
+
+  const render = () => {
+    while (card.firstChild) card.removeChild(card.firstChild)
+    const state = lastState
+    if (!state) {
+      card.appendChild(el('div', 'ts-placeholder', '尚无思考活动'))
+      return
     }
-    const dot = (color) => ({
-      width: 7, height: 7, borderRadius: '50%', background: color, flex: 'none',
-      ...(state.active ? { boxShadow: '0 0 0 3px ' + color + '33' } : {}),
-    })
-    const refined = (state.segments || []).filter((s) => s.refined).length
-    const segments = (state.segments || []).slice(-MAX_VISIBLE)
+    const thinks = state.thinks || []
+    // 头部：状态 + 计数
+    const head = el('div', 'ts-head')
+    const dot = el('span', 'ts-dot')
+    dot.style.background = state.active ? T.warn : T.ok
+    if (state.active) dot.style.boxShadow = '0 0 0 3px ' + T.warn + '33'
+    head.appendChild(dot)
+    head.appendChild(el('span', null, state.active ? '思考中' : '思考结束'))
+    head.appendChild(el('span', 'ts-head-tok', fmtTok(state.thinkingTokens) + ' tok'))
+    const totalSegs = thinks.reduce((sum, t) => sum + t.segments.length, 0)
+    head.appendChild(el('span', 'ts-head-tok', totalSegs + ' 段'))
+    const refinedCount = thinks.reduce((sum, t) => sum + t.segments.filter((s) => s.refined).length, 0)
+    if (refinedCount > 0) {
+      head.appendChild(el('span', 'ts-seg-refined', refinedCount + ' 段已精炼'))
+    }
+    card.appendChild(head)
 
-    const segRows = segments.map((s) => {
-      const metaParts = []
-      metaParts.push(fmtTok(s.tokens) + ' tok')
-      if (s.refined) metaParts.push('已精炼')
-      return React.createElement(
-        'div', {
-          key: s.index + ':' + s.ts,
-          title: '第' + (s.index + 1) + '段 · ' + s.tokens + ' tok' + (s.refined ? ' · 已精炼' : ''),
-          style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px' },
-        },
-        React.createElement('span', {
-          style: {
-            flex: 'none', minWidth: 18, height: 18, borderRadius: 9, background: T.hover,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 10.5, color: T.dim, fontWeight: 600,
-          },
-        }, String(s.index + 1)),
-        React.createElement('span', {
-          style: { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: T.text, fontSize: 12 },
-        }, s.summary),
-        React.createElement('span', { style: { flex: 'none', fontSize: 10.5, color: T.dim, whiteSpace: 'nowrap' } }, metaParts.join(' · ')),
+    const body = el('div', 'ts-body')
+    card.appendChild(body)
+
+    if (thinks.length === 0) {
+      body.appendChild(el('div', 'ts-placeholder', '等待思考…'))
+      return
+    }
+    thinks.forEach((t, thinkIndex) => {
+      const thinkEl = el('div', 'ts-think')
+      const open = expanded.has(t.id)
+      thinkEl.dataset.open = open ? 'true' : 'false'
+      const headBtn = el('button', 'ts-think-head')
+      headBtn.type = 'button'
+      headBtn.appendChild(el('span', 'ts-think-chevron', '▾'))
+      headBtn.appendChild(el('span', 'ts-think-title', '第 ' + (thinkIndex + 1) + ' 次思考'))
+      const status = el('span', 'ts-think-status', t.active ? '● 思考中' : '完成')
+      status.style.color = t.active ? T.warn : T.dim
+      headBtn.appendChild(status)
+      headBtn.appendChild(el('span', 'ts-think-meta', fmtTok(t.tokens) + ' tok' + (t.segments.length ? ' · ' + t.segments.length + ' 段' : '')))
+      headBtn.addEventListener('click', () => {
+        if (expanded.has(t.id)) expanded.delete(t.id)
+        else expanded.add(t.id)
+        thinkEl.dataset.open = expanded.has(t.id) ? 'true' : 'false'
+        const wrap = thinkEl.querySelector('.ts-think-segs')
+        if (wrap) wrap.hidden = !expanded.has(t.id)
+      })
+      thinkEl.appendChild(headBtn)
+      const segsWrap = el('div', 'ts-think-segs')
+      segsWrap.hidden = !open
+      if (t.segments.length === 0) {
+        segsWrap.appendChild(el('div', 'ts-placeholder', '正在积累思考，达到段窗口后逐段出摘要…'))
+      } else {
+        t.segments.forEach((s) => {
+          const row = el('div', 'ts-seg')
+          row.appendChild(el('span', 'ts-seg-num', String(s.index + 1)))
+          const sum = el('span', 'ts-seg-sum', s.summary)
+          sum.title = '第' + (s.index + 1) + '段 · ' + s.tokens + ' tok'
+          row.appendChild(sum)
+          const metaEl = el('span', 'ts-seg-meta', s.refined ? '已精炼' : '')
+          if (s.refined) metaEl.className = 'ts-seg-meta ts-seg-refined'
+          row.appendChild(metaEl)
+          segsWrap.appendChild(row)
+        })
+      }
+      thinkEl.appendChild(segsWrap)
+      body.appendChild(thinkEl)
+    })
+  }
+
+  const poll = async () => {
+    try {
+      const res = await fetch(STATE_ROUTE)
+      if (!res.ok) return
+      const json = await res.json()
+      if (!alive) return
+      const state = (json && json.state) || null
+      lastState = state
+      if (state) {
+        for (const t of state.thinks || []) if (t.active) expanded.add(t.id)
+      }
+      // 思考一开始就显示卡片（不等阈值）；结束后保留 KEEP_MS
+      if (state && (state.active || Date.now() - (state.updatedAt || 0) < KEEP_MS)) {
+        card.hidden = false
+        entry.dataset.active = 'true'
+      } else if (state && !cardOpen) {
+        card.hidden = true
+        delete entry.dataset.active
+      }
+      render()
+    } catch {
+      /* 轮询失败不影响聊天 */
+    } finally {
+      if (alive) {
+        const idle = !lastState || (!lastState.active && Date.now() - (lastState.updatedAt || 0) >= KEEP_MS)
+        pollTimer = setTimeout(poll, idle ? IDLE_POLL_MS : POLL_MS)
+      }
+    }
+  }
+
+  entry.addEventListener('click', () => {
+    cardOpen = !cardOpen
+    if (cardOpen) {
+      card.hidden = false
+      entry.dataset.active = 'true'
+      if (lastState && lastState.thinks && lastState.thinks.length > 0) {
+        expanded.add(lastState.thinks[lastState.thinks.length - 1].id)
+      }
+    } else if (!(lastState && (lastState.active || Date.now() - (lastState.updatedAt || 0) < KEEP_MS))) {
+      card.hidden = true
+      delete entry.dataset.active
+    } else {
+      delete entry.dataset.active
+    }
+    render()
+  })
+
+  // ---- 注入侧边栏（自愈，task-board 同款） ----
+  const sidebarRoot = () => {
+    const column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]')
+    if (!column) return undefined
+    const logoOwner = column.querySelector('[class*="logoRow"]')?.parentElement
+    return logoOwner || column.firstElementChild || undefined
+  }
+  const newSessionButton = (root) => {
+    const nested = root.querySelector('button[class*="newSession"]')
+    if (nested) return nested
+    for (const child of root.children) if (child.tagName === 'BUTTON') return child
+    return undefined
+  }
+  const place = (root) => {
+    const button = newSessionButton(root)
+    if (!button) return false
+    if (block.parentElement !== root) {
+      const row = button.closest('[class*="logoRow"]')
+      const base = (row && row.parentElement === root) ? row : button
+      const family = Array.from(root.children).filter(
+        (node) => node instanceof HTMLElement && node.matches('[data-dsh-thinksummary-block], [data-dsh-taskboard-entry], [data-dsh-ssh-entry]'),
       )
-    })
+      const anchor = family.length > 0 ? family[0] : base.nextElementSibling
+      root.insertBefore(block, anchor)
+    }
+    return true
+  }
 
-    return React.createElement(
-      'div', { style: { ...card, margin: '2px 0' } },
-      React.createElement(
-        'div', { style: headerStyle },
-        React.createElement('span', { style: dot(state.active ? T.warn : T.ok) }),
-        React.createElement('span', { style: { fontWeight: 600, color: T.text } }, state.active ? '思考中' : '思考结束'),
-        React.createElement('span', { style: { color: T.dim, fontVariantNumeric: 'tabular-nums' } }, fmtTok(state.thinkingTokens) + ' tok'),
-        React.createElement('span', { style: { color: T.dim } }, (state.segments || []).length + ' 段'),
-        refined > 0
-          ? React.createElement('span', { style: { color: T.accent, fontSize: 11 } }, refined + ' 段已精炼')
-          : null,
-      ),
-      segRows.length > 0
-        ? segRows
-        : React.createElement('div', { style: { padding: '5px 10px', color: T.dim } }, '正在积累思考，达到段窗口后逐段出摘要…'),
-    )
+  let root
+  let placed = false
+  const tryPlace = () => {
+    if (root !== undefined && !root.isConnected) {
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    if (placed) {
+      if (document.body.contains(block)) return
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    root = root || sidebarRoot()
+    if (root === undefined) return
+    placed = place(root)
+    if (placed) rootObserver.observe(root, { childList: true, subtree: true })
+  }
+  const rootObserver = new MutationObserver(() => {
+    if (root === undefined || !root.isConnected) {
+      placed = false
+      tryPlace()
+      return
+    }
+    if (!root.contains(block)) placed = place(root)
+  })
+  const waitObserver = new MutationObserver(() => tryPlace())
+  waitObserver.observe(document.body, { childList: true, subtree: true })
+  tryPlace()
+  void poll()
+
+  return () => {
+    alive = false
+    if (pollTimer !== null) clearTimeout(pollTimer)
+    waitObserver.disconnect()
+    rootObserver.disconnect()
+    block.remove()
   }
 }
 
@@ -478,11 +638,17 @@ export function apply(ctx) {
       { name: 'settings.plugin.item', id: 'think-summary', order: 120, label: 'think-summary' },
       makeSettingsCard(scope),
     ))
-    // 2) 实时面板（composer 上方整行）
-    ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
-      { name: 'conversation.input.dock', id: 'think-summary.panel' },
-      makePanel(),
-    ))
+    // 2) 侧边栏"思考总结"面板（按每次思考分组，初始即显示）
+    if (typeof document !== 'undefined') {
+      if (!document.querySelector('style[data-dsh-thinksummary-css]')) {
+        const style = document.createElement('style')
+        style.dataset.dshThinksummaryCss = ''
+        style.textContent = PANEL_CSS
+        document.head.appendChild(style)
+      }
+      const disposer = mountSidebarPanel()
+      ctx.effect?.(() => disposer)
+    }
   } catch (error) {
     // web shell 会因 apply 抛错而启动失败：外部插件必须吞掉
     console.error('[dsh-think-summary] client apply failed:', error)
