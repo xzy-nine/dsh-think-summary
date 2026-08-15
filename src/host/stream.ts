@@ -78,7 +78,9 @@ export function installDetect(
           skipReason: choice.skipReason,
           ts: Date.now(),
         })
-        if (refine && !choice.skipReason) {
+        // 小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token
+        const minRefine = opts.segmentMinTokens ?? 1500
+        if (refine && !choice.skipReason && tokens >= minRefine) {
           refine.enqueue({
             sessionId: key,
             thinkId: think.id,

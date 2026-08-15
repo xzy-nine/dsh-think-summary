@@ -48,10 +48,11 @@
 配置：selfSummary: 'off' | 'prompt'（默认 off——提示词有副作用）
 Host：
   1. installSelfSummaryPrompt(ctx, getOptions)
-     selfSummary='prompt' 时 ctx.systemPrompt.section({
-       name: 'think-summary:self', order: 200,
-       text: '在思考过程中，每完成一个重要子问题或得出阶段性结论时，输出一句不超过80字的阶段性小结，格式：【思考小结】内容。除该格式外不要在其他地方使用"思考小结"字样。',
-     })；设置变更（onChange）时同步注册/卸载
+     selfSummary='prompt' 时监听 `system-prompt/assemble` waterfall，组装时
+     追加 think-summary:self 段（order 200）：
+     '在思考过程中，每完成一个重要子问题或得出阶段性结论时，输出一句不超过80字的阶段性小结，格式：【思考小结】内容。除该格式外不要在其他地方使用"思考小结"字样。'
+     —— waterfall 事件每次组装都执行，不依赖 systemPrompt 服务注册时机
+        （修复：此前 section 注册可能因服务晚挂载而静默失败）
   2. makeSelfSummaryCapture(onSelf)  // llm/stream 瀑布内，每 think 一个
      捕获【思考小结】标记后内容，到 下一个标记 / 行尾 / 句末标点 / 240 字符
      （最先者）为止 → push segment { summary, tokens: 0, kind: 'self' }
@@ -61,7 +62,7 @@ Host：
 ```
 
 验证：捕获器单元测试（3 小结正确、不吞后续思考）+ 端到端（stream 路径
-kind='self' 段正常入 state）通过。
+kind='self' 段正常入 state）+ waterfall 追加验证通过。
 
 ## 六、建议与决策点
 

@@ -79,9 +79,13 @@ export function installFallback(
         const k = `${sid}:${turn}:${step}`
         const entry = buf.get(k)
         buf.delete(k)
-        const { state } = store.ensureThink(sid, `t${turn}`)
+        // 兜底 think 按 (turn, step) 隔离：同一 turn 的多个 step（如思考→工具调用→再思考）
+        // 各自独立成 think，不再合并（修复"已结束的 think 被认为是同一个"）
+        const thinkKey = `t${turn}_${step}`
+        const { state, think } = store.ensureThink(sid, thinkKey)
+        think.turn = turn
+        think.step = step
         // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配）。
-        // 注意：ensureThink 可能刚把 tN 兜底 think push 到数组尾部，不能只取最后一项；
         // 从后往前找"最后一个 s 开头、非活跃、未打标"的 think（该步 llm/stream 刚结束）。
         for (let i = state.thinks.length - 1; i >= 0; i--) {
           const t = state.thinks[i]
@@ -92,9 +96,7 @@ export function installFallback(
           }
         }
         if (!entry || entry.text.length === 0) return
-        const thinkKey = `t${turn}`
-        const { think } = store.ensureThink(sid, thinkKey)
-        // 实时路径已产出分段则跳过（该 think 已由实时路径置位 inSplice）
+        // 该 step 实时路径已产出分段则跳过
         if (state.inSplice && think.segments.length > 0) return
         const outcomes = processThinking(
           entry.text,
@@ -125,8 +127,9 @@ export function installFallback(
             skipReason: o.skipReason,
             ts: o.ts,
           })
-          // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过
-          if (refine && !o.skipReason) {
+          // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过；
+          // 小段（低于段最小窗口）不精炼，省 token
+          if (refine && !o.skipReason && o.tokens >= (opts.segmentMinTokens ?? 1500)) {
             refine.enqueue({
               sessionId: sid,
               thinkId: thinkKey,
