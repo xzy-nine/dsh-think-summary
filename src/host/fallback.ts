@@ -1,5 +1,6 @@
 import type { ThinkStateStore } from './state.js'
 import { estimateTokens } from './detect.js'
+import { MIN_SEGMENT_FLOOR } from './segment.js'
 import { processThinking } from './pipeline.js'
 import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
@@ -96,6 +97,10 @@ export function installFallback(
           }
         }
         if (!entry || entry.text.length === 0) return
+        // 与实时一致：未达长思考阈值（短思考，如工具调用间的几十 token 思考）
+        // 不产出段——实时路径由 inSplice 门控不出段，兜底也必须一致，
+        // 否则连续短思考会产生一连串几十 token 的小段
+        if (estimateTokens(entry.text) < threshold) return
         // 该 step 实时路径已产出分段则跳过
         if (state.inSplice && think.segments.length > 0) return
         const outcomes = processThinking(
@@ -118,6 +123,8 @@ export function installFallback(
           // ignore 模式：代码块/表格段不显示（与流式一致——总结卡片无痕迹）
           if (o.skipReason === 'code' && opts.codeBlockMode === 'ignore') continue
           if (o.skipReason === 'table' && opts.tableMode === 'ignore') continue
+          // 微尾段（低于 flush 下限）不产出
+          if (o.tokens < MIN_SEGMENT_FLOOR) continue
           const idx = base + o.index
           store.pushSegment(state, thinkKey, {
             index: idx,
