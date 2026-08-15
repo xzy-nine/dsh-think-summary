@@ -22,21 +22,50 @@ interface SystemPromptLike {
 }
 
 /** 按配置注册/卸载提示词段；返回同步函数（设置变更时调用）。 */
-export function installSelfSummaryPrompt(ctx: { get?: (name: string) => unknown }, getOptions: () => { selfSummary?: 'off' | 'prompt' }): () => void {
+export function installSelfSummaryPrompt(ctx: { get?: (name: string) => unknown; on?: (name: string, listener: (...args: any[]) => unknown) => unknown }, getOptions: () => { selfSummary?: 'off' | 'prompt' }): () => void {
   let dispose: (() => void) | null = null
-  const sync = () => {
+  let registered = false
+
+  const register = () => {
+    if (registered) return
+    if (getOptions().selfSummary !== 'prompt') return
+    const sp = ctx.get?.('systemPrompt') as SystemPromptLike | undefined
+    if (!sp || typeof sp.section !== 'function') return // 服务未就绪：等 internal/service
     try {
-      dispose?.()
-      dispose = null
-      if (getOptions().selfSummary === 'prompt') {
-        const sp = ctx.get?.('systemPrompt') as SystemPromptLike | undefined
-        if (sp && typeof sp.section === 'function') {
-          dispose = sp.section({ name: 'think-summary:self', order: 200, text: PROMPT_SELF_SUMMARY })
-        }
-      }
-    } catch {
-      /* 提示词服务不可用/注册失败：仅影响该模式，不影响主流程 */
+      dispose = sp.section({ name: 'think-summary:self', order: 200, text: PROMPT_SELF_SUMMARY })
+      registered = true
+      // eslint-disable-next-line no-console
+      console.log('[dsh-think-summary] self-summary prompt section registered (order 200)')
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[dsh-think-summary] self-summary prompt section registration failed:', error instanceof Error ? error.message : String(error))
     }
+  }
+
+  const sync = () => {
+    if (getOptions().selfSummary === 'prompt') {
+      register()
+    } else if (registered) {
+      try {
+        dispose?.()
+      } catch {
+        /* 忽略卸载异常 */
+      }
+      dispose = null
+      registered = false
+      // eslint-disable-next-line no-console
+      console.log('[dsh-think-summary] self-summary prompt section removed')
+    }
+  }
+
+  // 响应式等待服务就绪：插件 apply 时 systemPrompt 服务可能晚于本插件挂载
+  // （同 whenWebServer 的 internal/service 模式）；服务出现后补注册
+  try {
+    ctx.on?.('internal/service', (name: unknown) => {
+      if (name === 'systemPrompt') sync()
+    })
+  } catch {
+    /* 事件不可用则退化为一次性尝试 */
   }
   sync()
   return sync
