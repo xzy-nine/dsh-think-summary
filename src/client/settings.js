@@ -50,6 +50,19 @@ const FIELD_GROUPS = [
       { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
     ],
   },
+  {
+    caption: '主模型自产小结',
+    fields: [
+      {
+        key: 'selfSummary', label: '模式', kind: 'enum',
+        options: [
+          ['off', '关闭'],
+          ['prompt', '注入提示词并捕获'],
+        ],
+        hint: '向系统提示词注入小结指令，思考时模型输出【思考小结】标记，插件流内捕获直接展示（默认关：会改变主模型思考方式，需实测）',
+      },
+    ],
+  },
 ]
 
 /** 开关（视觉 switch，实际是带 aria 的 button）。 */

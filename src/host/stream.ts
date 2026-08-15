@@ -2,6 +2,7 @@ import { ThinkingDetector } from './detect.js'
 import type { ThinkStateStore } from './state.js'
 import { Segmenter, hashText } from './segment.js'
 import { summarizeSegment } from './summarize/heuristic.js'
+import { makeSelfSummaryCapture } from './self-summary.js'
 import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
 import type { CtxLike } from './ctx.js'
@@ -90,6 +91,21 @@ export function installDetect(
       },
     )
     let blockType: string | null = null
+    // 主模型自产小结捕获器（selfSummary='prompt' 时启用）：捕获【思考小结】标记，
+    // 直接 push 为段摘要（仅展示补充，不影响外部分段/精炼）
+    const self = opts.selfSummary === 'prompt' ? makeSelfSummaryCapture((summary) => {
+      const h = hashText('self:' + summary)
+      if (state.hashes.has(h)) return
+      state.hashes.add(h)
+      store.pushSegment(state, think.id, {
+        index: think.segments.length,
+        summary,
+        tokens: 0,
+        refined: false,
+        kind: 'self',
+        ts: Date.now(),
+      })
+    }) : null
 
     const inner = next()
     return (async function* () {
@@ -103,6 +119,7 @@ export function installDetect(
               if (blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
               blockType = c.blockType ?? null
             } else if (t === 'reasoning-delta' && typeof c.text === 'string' && c.text.length > 0) {
+              self?.feed(c.text) // 主模型自产小结捕获（selfSummary 模式）
               const raw = segmenter.feed(c.text) // 一次扫描，与检测器共享
               detector.feedRaw(raw, {
                 onSpliceStart: () => {
@@ -114,6 +131,7 @@ export function installDetect(
               state.thinkingTokens = think.tokens
               state.updatedAt = Date.now()
             } else if (t === 'finish') {
+              self?.flush()
               segmenter.flush()
               store.endThink(key, think.id)
             }
@@ -121,6 +139,7 @@ export function installDetect(
           }
         } finally {
           // abort/提前结束/无 finish 的 provider：flush 尾巴并收尾（幂等）
+          self?.flush()
           segmenter.flush()
           store.endThink(key, think.id)
         }

@@ -14,8 +14,9 @@ function fmtTok(n) {
   return k + 'k'
 }
 
-/** 段状态：代码段/表格段 → 结构化摘要（未精炼）；已精炼 → 已精炼；否则无标签。 */
+/** 段状态：主模型小结 → 小结标签；代码段/表格段 → 结构化摘要（未精炼）；已精炼 → 已精炼；否则无标签。 */
 function segStatus(s) {
+  if (s && s.kind === 'self') return { cls: 'ts-seg-self', label: '思考小结' }
   if (s && s.skipReason === 'code') return { cls: 'ts-seg-skip', label: '代码段·未精炼' }
   if (s && s.skipReason === 'table') return { cls: 'ts-seg-skip', label: '表格·未精炼' }
   if (s && s.refined) return { cls: 'ts-seg-refined', label: '已精炼' }
@@ -33,4 +34,9 @@ function refineTokStr(s) {
   const rt = s.refineTokens || {}
   const total = (rt.input || 0) + (rt.output || 0)
   return total > 0 ? ' · 精炼 ~' + fmtTok(total) + ' tok' : ''
+}
+
+/** 段头标签：主模型小结 → "小结"；普通段 → "原始 X tok[ · 精炼 ~Y tok]"。 */
+function segHeadLabel(s, prefix) {
+  return prefix + '第' + (s.index + 1) + '段 · ' + (s.kind === 'self' ? '小结' : '原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s))
 }

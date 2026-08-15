@@ -37,15 +37,23 @@ export interface ThinkSummaryConfig {
    *  - 'full'     完整保留（不裁剪，信息最全，最耗 token）
    */
   refineTrim?: 'headtail' | 'tail' | 'full'
+  /**
+   * 主模型自产小结模式（docs/self-summary-mode.md）：
+   *  - 'off' 关闭（默认，不注入提示词、不捕获）
+   *  - 'prompt' 向系统提示词注入小结指令（order 200），流内捕获【思考小结】标记，
+   *    直接作为段摘要展示（仅展示补充，不影响外部分段）
+   */
+  selfSummary?: 'off' | 'prompt'
 }
 
 export type BlockMode = 'ignore' | 'keep-skip' | 'keep-refine'
 
-export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim' | 'codeBlockMode' | 'tableMode'>> & {
+export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim' | 'codeBlockMode' | 'tableMode' | 'selfSummary'>> & {
   refineModel: string
   refineTrim: 'headtail' | 'tail' | 'full'
   codeBlockMode: BlockMode
   tableMode: BlockMode
+  selfSummary: 'off' | 'prompt'
 } = {
   enabled: true,
   thinkThresholdTokens: 2000,
@@ -59,6 +67,7 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   codeBlockMode: 'ignore',
   tableMode: 'ignore',
   refineTrim: 'headtail',
+  selfSummary: 'off',
 }
 
 export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { refineModel: string } {

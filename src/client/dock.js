@@ -74,7 +74,7 @@ function makeInputDock() {
           'div', { key: t.id + ':' + s.index, className: 'ts-dock-seg' },
           React.createElement(
             'div', { className: 'ts-dock-seg-head' },
-            React.createElement('span', null, prefix + '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s)),
+            React.createElement('span', null, segHeadLabel(s, prefix)),
             segStatusEl(s),
           ),
           React.createElement('div', { className: 'ts-dock-seg-text' }, s.summary),

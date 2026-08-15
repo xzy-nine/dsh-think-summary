@@ -62,7 +62,7 @@ function makeThinkTail() {
         'div', { key: s.index, className: 'ts-tail-seg' },
         React.createElement(
           'div', { className: 'ts-tail-seg-head' },
-          React.createElement('span', null, '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s)),
+          React.createElement('span', null, segHeadLabel(s, '')),
           segStatusEl(s),
         ),
         React.createElement('div', { className: 'ts-tail-seg-text' }, s.summary),

@@ -5,6 +5,7 @@ import { ThinkStateStore } from './host/state.js'
 import { installRpc } from './host/rpc.js'
 import { installSettingsRpc } from './host/settings-rpc.js'
 import { installFallback } from './host/fallback.js'
+import { installSelfSummaryPrompt } from './host/self-summary.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
 import { resolveConfig, type ThinkSummaryConfig } from './host/config.js'
 import type { CtxLike } from './host/ctx.js'
@@ -28,6 +29,7 @@ const Config = z.object({
   codeBlockMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   tableMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),
+  selfSummary: z.union([z.const('off'), z.const('prompt')]).default('off'),
 })
 
 /**
@@ -79,11 +81,15 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   installSettingsRpc(ctx, store)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 
+  // 主模型自产小结：按 selfSummary 配置注入/卸载提示词段（设置变更即时同步）
+  const syncSelfPrompt = installSelfSummaryPrompt(ctx, () => getConfig())
+
   installSettingsSection(ctx as never, NS, Config, resolveConfig(config), {
     setSource: (source: unknown) => {
       getConfig = source as () => ThinkSummaryConfig
     },
     onChange: () => {
+      syncSelfPrompt()
       /* 阈值/开关按流读取，设置即时生效 */
     },
   })

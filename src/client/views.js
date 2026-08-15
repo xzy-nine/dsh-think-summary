@@ -46,7 +46,7 @@ function makeThinkSummaryView() {
           'div', { key: t.id + ':' + s.index, className: 'ts-view-seg' },
           React.createElement(
             'div', { className: 'ts-view-seg-head' },
-            React.createElement('span', null, '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s)),
+            React.createElement('span', null, segHeadLabel(s, '')),
             segStatusEl(s),
           ),
           React.createElement('div', { className: 'ts-view-seg-text' }, s.summary),
