@@ -30,10 +30,12 @@
   "files": [
     "lib",
     "src",
+    "scripts",
     "cordis.patch.yml",
     "README.md",
     "docs"
   ],
+  "author": "zzj <3318897344@qq.com>",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "prepack": "npm run build",
