@@ -17,6 +17,8 @@ function makeThinkTail() {
 
     React.useEffect(() => {
       if (!sessionId || !turn) return undefined
+      // eslint-disable-next-line no-console
+      console.log('[ts-tail] mount', 'turn=' + turn.turn, 'seq=' + seq, 'sessionId=' + sessionId, 'steps=' + (turn.steps ? turn.steps.length : 0))
       let alive = true
       let timer = null
       let tries = 0
@@ -48,9 +50,13 @@ function makeThinkTail() {
             ) ||
             thinks.find((t) => t.turn === turn.turn && t.segments && t.segments.length > 0)
           if (matched) {
+            // eslint-disable-next-line no-console
+            console.log('[ts-tail] matched', 'think=' + matched.id, 'turn=' + matched.turn, 'step=' + matched.step, 'segs=' + matched.segments.length)
             setThink(matched)
             return // 找到即停（含精炼完成的标记）
           }
+          // eslint-disable-next-line no-console
+          console.log('[ts-tail] no-match', 'turn=' + turn.turn, 'stepNo=' + stepNo, 'thinks=' + thinks.length)
         } catch {
           /* 轮询失败不渲染 */
         }

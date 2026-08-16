@@ -25,7 +25,11 @@ export function apply(ctx) {
     ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register(
       {
         name: 'conversation.chat.turnTail',
-        select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null),
+        select: (owner) => {
+          // eslint-disable-next-line no-console
+          console.log('[ts-tail] select', owner && owner.turn ? owner.turn.turn : 'NO-TURN', 'seq=' + (owner && owner.seq))
+          return owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null
+        },
       },
       makeThinkTail(),
     ))
