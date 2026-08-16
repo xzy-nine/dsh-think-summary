@@ -20,16 +20,12 @@ export function apply(ctx) {
       { name: 'settings.plugin.item', id: 'think-summary', order: 120, label: 'think-summary' },
       makeSettingsCard(scope),
     ))
-    // 2) 聊天流内：对应助手消息输出下方的思考总结条（可折叠/多行）
+    // 2) 聊天流内：turn 末尾的思考总结条（turn 级槽位，显示该 turn 全部思考分组）
     //    select 返回值成为组件的 matched prop：传 TurnLocation 对象 + seq
     ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register(
       {
         name: 'conversation.chat.turnTail',
-        select: (owner) => {
-          // eslint-disable-next-line no-console
-          console.log('[ts-tail] select', owner && owner.turn ? owner.turn.turn : 'NO-TURN', 'seq=' + (owner && owner.seq))
-          return owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null
-        },
+        select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null),
       },
       makeThinkTail(),
     ))

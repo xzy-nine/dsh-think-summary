@@ -40,6 +40,8 @@ const PANEL_CSS = `
 .ts-tail-body{border-top:1px solid var(--dsw-alias-separator-primary);max-height:320px;overflow-y:auto}
 .ts-tail-seg{padding:6px 10px 6px 26px}
 .ts-tail-seg + .ts-tail-seg{border-top:1px solid var(--dsw-alias-separator-primary)}
+.ts-tail-group + .ts-tail-group{border-top:1px solid var(--dsw-alias-separator-primary)}
+.ts-tail-group-head{padding:5px 10px;font-size:10.5px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-1);letter-spacing:.02em}
 .ts-tail-seg-head{display:flex;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
 .ts-tail-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
 .ts-view{box-sizing:border-box;width:100%;max-width:calc(var(--dsh-composer-card-max-width) - 2 * var(--dsh-composer-dock-inset, 8px));margin:0 auto;padding:16px 12px 32px}
