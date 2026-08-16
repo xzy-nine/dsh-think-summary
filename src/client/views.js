@@ -2,21 +2,23 @@
  * "思考总结"视图（conversation.view 槽位条目，id 'think-summary'）：
  * 会话头部出现"思考总结"选项卡，显示当前会话**所有有输出**的思考总结
  * （实时 + 兜底，无段落的 think 不显示），**按时间正序、最新的在底部**。
- * 自动滚动对齐聊天流式输出的官方逻辑（ui-conversation）：
- * scroll 事件实时判定"是否在底部"（距底 ≤25px），数据更新时**仅在底部才
- * 自动滚到底**；用户向上滚动即锁定，滚回底部自动恢复跟随。
+ * 自动滚动：首次/挂载时滚到底部；scroll 事件实时判定"是否在底部"
+ * （距底 ≤25px），数据更新时仅在底部才继续跟随——用户上滚即锁定，
+ * 滚回底部自动恢复。折叠状态持久化（localStorage），切选项卡不丢失。
  * 每个 think 一个可折叠卡片：段摘要 + 原始/精炼双 token + 状态标签。
  * 代码块/表格（ignore 模式）不显示。
  */
 
-/** 找列表所在的滚动容器：优先官方会话滚动容器（data-conversation-scroll），兜底向上找可滚动祖先。 */
+/** 折叠状态持久化键。 */
+const OPEN_MAP_KEY = 'dsh.thinkSummary.openMap.v1'
+
+/** 找列表所在的**实际可滚动**祖先（不依赖 data-conversation-scroll 标记，
+ * 避免误命中非滚动容器导致 scrollTop 设置无效）。 */
 function findScroller(el) {
   if (!el) return null
-  const host = el.closest ? el.closest('[data-conversation-scroll]') : null
-  if (host instanceof HTMLElement) return host
   let p = el.parentElement
   let depth = 0
-  while (p && depth < 8) {
+  while (p && depth < 10) {
     if (p.scrollHeight > p.clientHeight + 1) return p
     p = p.parentElement
     depth++
@@ -24,14 +26,38 @@ function findScroller(el) {
   return null
 }
 
+/** 读/写折叠状态（localStorage 持久化，切选项卡不丢）。 */
+function readOpenMap() {
+  try {
+    const raw = localStorage.getItem(OPEN_MAP_KEY)
+    if (raw) {
+      const m = JSON.parse(raw)
+      if (m && typeof m === 'object') return m
+    }
+  } catch {
+    /* 不可用则用空 */
+  }
+  return {}
+}
+
+function writeOpenMap(m) {
+  try {
+    localStorage.setItem(OPEN_MAP_KEY, JSON.stringify(m))
+  } catch {
+    /* 忽略 */
+  }
+}
+
 function makeThinkSummaryView() {
   return function ThinkSummaryView(props) {
     const sessionId = props && props.sessionId
     const [state, setState] = React.useState(null)
-    const [openMap, setOpenMap] = React.useState({})
+    const [openMap, setOpenMap] = React.useState(readOpenMap)
     const listRef = React.useRef(null)
     // 是否停在底部（用户滚动时由 scroll 事件实时更新；仅在底部时自动跟随）
     const atBottomRef = React.useRef(true)
+    // 首次渲染（列表出现）强制滚到底部，此后由 scroll 事件接管
+    const firstRunRef = React.useRef(true)
 
     React.useEffect(() => {
       if (!sessionId) return undefined
@@ -58,8 +84,9 @@ function makeThinkSummaryView() {
       }
     }, [sessionId])
 
-    // 对齐官方流式滚动：scroll 事件更新 atBottom（距底 ≤25px 视为在底部）；
-    // 数据更新（state 变化）时仅在 atBottom 才滚到底——用户上滚即锁定，滚回底部自动恢复
+    // 滚动：scroll 事件更新 atBottom；数据更新时仅在底部才滚底；
+    // 首次挂载强制滚底（否则初始 update() 会把 atBottom 算成 false，
+    // 内容停在顶部——用户看到的"总是滚到顶部"）
     React.useEffect(() => {
       const el = listRef.current
       if (!el) return undefined
@@ -70,15 +97,25 @@ function makeThinkSummaryView() {
         atBottomRef.current = floor - scroller.scrollTop <= 25
       }
       scroller.addEventListener('scroll', update, { passive: true })
-      update()
-      if (atBottomRef.current) scroller.scrollTop = scroller.scrollHeight // 初始/跟随滚底
+      if (firstRunRef.current) {
+        firstRunRef.current = false
+        atBottomRef.current = true
+        scroller.scrollTop = scroller.scrollHeight // 初始滚到底部
+      } else {
+        update()
+        if (atBottomRef.current) scroller.scrollTop = scroller.scrollHeight // 跟随滚底
+      }
       return () => scroller.removeEventListener('scroll', update)
     }, [state])
 
     const thinks = (state && state.thinks) || []
     // 只显示有输出的思考；正序（最新的在底部）
     const visible = thinks.filter((t) => t.segments && t.segments.length > 0)
-    const toggle = (id) => setOpenMap((m) => ({ ...m, [id]: !m[id] }))
+    const toggle = (id) => setOpenMap((m) => {
+      const next = { ...m, [id]: !m[id] }
+      writeOpenMap(next) // 持久化折叠状态：切选项卡/重挂不丢失
+      return next
+    })
     const open = (id) => (openMap[id] === undefined ? true : openMap[id])
 
     const thinkCards = visible.map((t) => {
