@@ -14,6 +14,8 @@ export interface SegmentSummary {
   skipReason?: 'code' | 'table'
   /** 'self' = 主模型自产小结（selfSummary 模式捕获，直接展示，不经启发式/精炼）。 */
   kind?: 'self'
+  /** 未精炼原因（小段/精炼失败/超时等；UI 状态标签显示）。 */
+  unrefinedReason?: string
   /** 精炼实际消耗（估算）：输入 = 裁剪后喂入的 token，输出 = 摘要 token。 */
   refineTokens?: { input?: number; output?: number }
   ts: number

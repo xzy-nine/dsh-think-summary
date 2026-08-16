@@ -70,17 +70,22 @@ export function installDetect(
           skipCode: opts.codeBlockMode === 'keep-skip',
           skipTable: opts.tableMode === 'keep-skip',
         })
+        // 小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token，记原因
+        const minRefine = opts.segmentMinTokens ?? 1500
+        const tooSmall = tokens < minRefine
         store.pushSegment(state, think.id, {
           index: idx,
           summary: choice.summary,
           tokens,
           refined: false,
           skipReason: choice.skipReason,
+          unrefinedReason:
+            refine && !choice.skipReason && tooSmall
+              ? `段过小（${tokens} tok < ${minRefine}）未精炼`
+              : undefined,
           ts: Date.now(),
         })
-        // 小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token
-        const minRefine = opts.segmentMinTokens ?? 1500
-        if (refine && !choice.skipReason && tokens >= minRefine) {
+        if (refine && !choice.skipReason && !tooSmall) {
           refine.enqueue({
             sessionId: key,
             thinkId: think.id,

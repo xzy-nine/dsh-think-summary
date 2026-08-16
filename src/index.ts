@@ -61,7 +61,18 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
       if (seg && s) {
         seg.summary = refinedSummary
         seg.refined = true
+        seg.unrefinedReason = undefined // 已精炼，清除原因
         seg.refineTokens = refineTokens
+        s.updatedAt = Date.now()
+      }
+    },
+    // 精炼失败/超时：把原因写回段（UI 显示"未精炼原因"）
+    (sessionId, thinkId, segmentIndex, reason) => {
+      const s = store.get(sessionId)
+      const think = s?.thinks.find((t) => t.id === thinkId)
+      const seg = think?.segments[segmentIndex]
+      if (seg && s) {
+        seg.unrefinedReason = '精炼失败：' + reason
         s.updatedAt = Date.now()
       }
     },

@@ -59,6 +59,11 @@ export interface RefineApply {
   ): void
 }
 
+/** 精炼失败回调：把失败/超时原因写回段（UI 显示"未精炼原因"）。 */
+export interface RefineFail {
+  (sessionId: string, thinkId: string, segmentIndex: number, reason: string): void
+}
+
 /** 展示截断：精炼结果最多保留 ~60 token（约 240 字符）。 */
 const DISPLAY_MAX_CHARS = 240
 
@@ -146,15 +151,18 @@ export class RefineQueue {
   private readonly getOptions: () => RefineOptions
   private readonly getLlm: () => LlmLike | undefined
   private readonly apply: RefineApply
+  private readonly onFail?: RefineFail
 
   constructor(
     getOptions: () => RefineOptions,
     getLlm: () => LlmLike | undefined,
     apply: RefineApply,
+    onFail?: RefineFail,
   ) {
     this.getOptions = getOptions
     this.getLlm = getLlm
     this.apply = apply
+    this.onFail = onFail
   }
 
   /** 门控入队（读实时配置）：精炼开关开（段大小/代码跳过由调用方决定）。 */
@@ -215,6 +223,7 @@ export class RefineQueue {
     } catch (error) {
       // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求与其他任务；
       // 记录失败便于排查"未精炼"的段（含超时）
+      const reason = error instanceof Error ? error.message : String(error)
       // eslint-disable-next-line no-console
       console.error(
         '[dsh-think-summary] refine failed:',
@@ -222,8 +231,9 @@ export class RefineQueue {
         task.thinkId,
         'seg',
         task.segmentIndex,
-        error instanceof Error ? error.message : String(error),
+        reason,
       )
+      this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, reason)
     }
   }
 
