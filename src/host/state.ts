@@ -92,9 +92,6 @@ export class ThinkStateStore {
   }
 
   private notify(): void {
-    // 诊断：确认 notify 被调用（段产生时 persist 应写盘）
-    // eslint-disable-next-line no-console
-    console.log(`[dsh-think-summary] notify store=${this.instanceId} pid=${typeof process !== 'undefined' ? process.pid : '?'} listeners=${this.listeners.size} hasSegs=${this.map.size > 0 && [...this.map.values()].some((s) => s.thinks.some((t) => t.segments.length > 0))}`)
     for (const l of this.listeners) l()
   }
 
