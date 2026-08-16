@@ -7,7 +7,7 @@ import { installSettingsRpc } from './host/settings-rpc.js'
 import { installFallback } from './host/fallback.js'
 import { installSelfSummaryPrompt } from './host/self-summary.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
-import { resolveConfig, type ThinkSummaryConfig } from './host/config.js'
+import { resolveConfig, DEFAULT_REFINE_PROMPT, type ThinkSummaryConfig } from './host/config.js'
 import type { CtxLike } from './host/ctx.js'
 
 export const name = 'dsh-think-summary'
@@ -26,6 +26,7 @@ const Config = z.object({
   refineMaxInputTokens: z.number().default(1500),
   refineOutputTokens: z.number().default(1024),
   refineModel: z.string().default('auto'),
+  refinePrompt: z.string().default(DEFAULT_REFINE_PROMPT),
   codeBlockMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   tableMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),

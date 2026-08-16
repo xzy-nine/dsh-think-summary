@@ -48,6 +48,7 @@ const FIELD_GROUPS = [
       },
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
       { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
+      { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
     ],
   },
   {
@@ -203,10 +204,13 @@ function makeSettingsCard(scope) {
     React.useEffect(() => {
       if (snap && snap.status === 'ready' && !busy) {
         const v = snap.value || {}
+        const b = snap.base || {}
         const next = {}
         for (const group of FIELD_GROUPS) {
           for (const f of group.fields) {
-            next[f.key] = f.kind === 'bool' ? (v[f.key] === undefined ? true : !!v[f.key]) : (v[f.key] === undefined ? '' : String(v[f.key]))
+            next[f.key] = f.kind === 'bool'
+              ? (v[f.key] === undefined ? true : !!v[f.key])
+              : (v[f.key] === undefined ? (b[f.key] === undefined ? '' : String(b[f.key])) : String(v[f.key]))
           }
         }
         setDraft(next)
@@ -315,6 +319,18 @@ function makeSettingsCard(scope) {
             }),
             f.unit ? React.createElement('span', { style: { fontSize: 11, color: T.dim } }, f.unit) : null,
           )
+        } else if (f.kind === 'area') {
+          control = React.createElement('textarea', {
+            value: value ?? '',
+            rows: 3,
+            disabled: busy || snap.writable === false,
+            onChange: (e) => setField(f.key, e.target.value),
+            title: f.hint,
+            style: {
+              width: 210, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
+              background: 'transparent', color: T.text, fontSize: 12.5, resize: 'vertical', lineHeight: 1.4,
+            },
+          })
         } else if (f.kind === 'enum') {
           control = React.createElement(
             'select',

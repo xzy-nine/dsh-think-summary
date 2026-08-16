@@ -1,14 +1,14 @@
 /**
  * M3 小模型精炼（design.md §4.3.2）：
- *  - 门控：仅 refineEnabled 总开关（早期版本的"肥段门槛"按用户要求移除——
- *    开启即全量精炼）
+ *  - 门控：仅 refineEnabled 总开关；段 < 段最小窗口不精炼（省 token）
  *  - 模型来源：复用主请求的 provider，`llm.listModels` 选最小可用模型（'auto'）
  *  - 输入硬截断：只喂段尾部 refineMaxInputTokens；输出上限 refineOutputTokens
  *  - 独立队列，并发 1；绝不阻塞主请求（fire-and-forget）
  *  - 异常/中止：错误隔离回退启发式（保留原摘要）；按会话取消未完成任务
- *  - 固定短提示词模板，不随内容增长
+ *  - 提示词：默认固定短模板，设置页可修改（refinePrompt）
  */
 import { countRaw, estimateTokens } from '../detect.js'
+import { DEFAULT_REFINE_PROMPT } from '../config.js'
 
 export interface RefineOptions {
   enabled?: boolean
@@ -21,6 +21,8 @@ export interface RefineOptions {
   outputTokens?: number
   /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
   model?: string
+  /** 精炼 system 提示词（设置页可修改；缺省用默认模板）。 */
+  refinePrompt?: string
   /**
    * 输入裁剪策略：'headtail' 头尾裁剪（保头+尾、丢中段）；
    * 'tail' 仅保尾部；'full' 完整保留（不裁剪）。头尾裁剪同预算信息量更高，
@@ -61,10 +63,6 @@ interface Controller {
   abort: () => void
   signal?: AbortSignal
 }
-
-/** 固定提示词模板（一次写好，不随内容增长）。 */
-const PROMPT_SYSTEM =
-  '你是思考链分段摘要器。用不超过60个字总结给定思考片段的核心内容与结论，只输出总结本身，不要任何前缀或解释。'
 
 /** 展示截断：精炼结果最多保留 ~60 token（约 240 字符）。 */
 const DISPLAY_MAX_CHARS = 240
@@ -261,7 +259,7 @@ export class RefineQueue {
       provider: task.provider,
       model,
       maxTokens: outputTokens,
-      system: PROMPT_SYSTEM,
+      system: this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
       messages: [
         {
           role: 'user',

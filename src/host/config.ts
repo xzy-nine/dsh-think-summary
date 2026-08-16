@@ -22,6 +22,8 @@ export interface ThinkSummaryConfig {
   refineOutputTokens?: number
   /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
   refineModel?: string
+  /** 精炼 system 提示词（设置页可显示/修改）。 */
+  refinePrompt?: string
   /**
    * 代码块处理：'ignore' 内容不写进缓冲（省内存/token，仅记行数元信息段）；
    * 'keep-skip' 保留内容（原子不分段）+ 结构化摘要、跳过精炼；
@@ -48,6 +50,10 @@ export interface ThinkSummaryConfig {
 
 export type BlockMode = 'ignore' | 'keep-skip' | 'keep-refine'
 
+/** 默认精炼 system 提示词（设置页可修改）。 */
+export const DEFAULT_REFINE_PROMPT =
+  '你是思考链分段摘要器。用不超过60个字总结给定思考片段的核心内容与结论，只输出总结本身，不要任何前缀或解释。'
+
 export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim' | 'codeBlockMode' | 'tableMode' | 'selfSummary'>> & {
   refineModel: string
   refineTrim: 'headtail' | 'tail' | 'full'
@@ -64,6 +70,7 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   refineMaxInputTokens: 1500,
   refineOutputTokens: 1024,
   refineModel: 'auto',
+  refinePrompt: DEFAULT_REFINE_PROMPT,
   codeBlockMode: 'ignore',
   tableMode: 'ignore',
   refineTrim: 'headtail',
