@@ -92,7 +92,7 @@ function makeThinkTail() {
           className: 'ts-tail-head',
           onClick: () => setOpen(!open),
         },
-        React.createElement('span', { className: 'ts-tail-chevron' }, '▾'),
+        chevronEl('ts-tail-chevron'),
         React.createElement('span', { className: 'ts-tail-title' }, '思考总结'),
         React.createElement('span', { className: 'ts-tail-meta' }, totalSegs + ' 段 · ' + thinks.length + ' 次思考'),
         totalRefined > 0 ? React.createElement('span', { className: 'ts-tail-refined' }, totalRefined + ' 段已精炼') : null,

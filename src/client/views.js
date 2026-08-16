@@ -136,7 +136,7 @@ function makeThinkSummaryView() {
         'div', { key: t.id, className: 'ts-view-card', 'data-open': expanded ? 'true' : 'false' },
         React.createElement(
           'button', { type: 'button', className: 'ts-view-head', onClick: () => toggle(t.id), 'aria-expanded': expanded ? 'true' : 'false' },
-          React.createElement('span', { className: 'ts-view-chevron' }, '▾'),
+          chevronEl('ts-view-chevron'),
           React.createElement('span', { className: 'ts-view-title' }, '思考 ' + t.id + (t.active ? ' · 进行中' : '')),
           React.createElement(
             'span', { className: 'ts-view-meta' },

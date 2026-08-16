@@ -338,7 +338,7 @@ function makeSettingsCard(scope) {
           React.createElement('span', { className: 'ts-set-name' }, 'think-summary'),
           React.createElement('span', { className: 'ts-set-desc' }, '长思考链分段总结 · 改动即时生效'),
         ),
-        React.createElement('span', { className: 'ts-set-chevron' }, '▾'),
+        chevronEl('ts-set-chevron'),
       ),
       open
         ? React.createElement(

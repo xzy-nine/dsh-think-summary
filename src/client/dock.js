@@ -112,7 +112,7 @@ function makeInputDock() {
               onClick: () => setPrevOpen(!prevOpen),
               'aria-expanded': prevOpen ? 'true' : 'false',
             },
-            React.createElement('span', { className: 'ts-dock-prev-chevron' }, '▸'),
+            chevronRightEl('ts-dock-prev-chevron'),
             React.createElement('span', null, '上次思考 · ' + prev.segments.length + ' 段'),
           )
         : null
@@ -132,7 +132,7 @@ function makeInputDock() {
         React.createElement(
           'button',
           { type: 'button', className: 'ts-dock-head', onClick: () => setOpen(!open) },
-          React.createElement('span', { className: 'ts-dock-chevron' }, '▾'),
+          chevronEl('ts-dock-chevron'),
           React.createElement('span', { className: 'ts-dock-title' }, '思考总结'),
           React.createElement(
             'span', { className: 'ts-dock-progress' },
