@@ -180,6 +180,8 @@ function makeSettingsCard(scope) {
     const [seed, setSeed] = React.useState(0)
     const [open, setOpen] = React.useState(false)
     const [cleanBusy, setCleanBusy] = React.useState(false)
+    // 分组折叠状态：默认全部折叠
+    const [groupOpen, setGroupOpen] = React.useState({})
 
     React.useEffect(() => {
       const sync = () => setSnap(scope.getSnapshot())
@@ -317,6 +319,9 @@ function makeSettingsCard(scope) {
     )
 
     const groups = FIELD_GROUPS.map((group) => {
+      // 分组折叠：默认折叠（groupOpen[group.caption] !== true）
+      const expanded = groupOpen[group.caption] === true
+      const toggleGroup = () => setGroupOpen((m) => ({ ...m, [group.caption]: !(m[group.caption] === true) }))
       const rows = group.fields.map((f) => {
         const value = draft[f.key]
 
@@ -369,31 +374,41 @@ function makeSettingsCard(scope) {
           React.createElement('p', { className: 'ts-set-hint' }, f.hint),
         )
       })
-      return React.createElement(
-        'div', { key: group.caption, className: 'ts-set-group' },
-        React.createElement('div', { className: 'ts-set-caption' }, group.caption),
-        ...rows,
-        // "存储与清理"组末尾：立即清理已归档总结
-        group.caption === '存储与清理'
-          ? React.createElement(
-              'div', { key: '__clean__', className: 'ts-set-field' },
+      // "存储与清理"组末尾：立即清理已归档总结
+      const cleanRow = group.caption === '存储与清理'
+        ? React.createElement(
+            'div', { key: '__clean__', className: 'ts-set-field' },
+            React.createElement(
+              'div', { className: 'ts-set-head' },
+              React.createElement('label', { className: 'ts-set-label' }, '立即清理'),
               React.createElement(
-                'div', { className: 'ts-set-head' },
-                React.createElement('label', { className: 'ts-set-label' }, '立即清理'),
-                React.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'ts-set-discard',
-                    disabled: cleanBusy || snap.writable === false,
-                    onClick: () => void clearArchived(),
-                  },
-                  cleanBusy ? '清理中…' : '清理已归档总结',
-                ),
+                'button',
+                {
+                  type: 'button',
+                  className: 'ts-set-discard',
+                  disabled: cleanBusy || snap.writable === false,
+                  onClick: () => void clearArchived(),
+                },
+                cleanBusy ? '清理中…' : '清理已归档总结',
               ),
-              React.createElement('p', { className: 'ts-set-hint' }, '删除所有非活跃会话的思考总结（含磁盘持久化数据），运行中的会话不受影响'),
-            )
-          : null,
+            ),
+            React.createElement('p', { className: 'ts-set-hint' }, '删除所有非活跃会话的思考总结（含磁盘持久化数据），运行中的会话不受影响'),
+          )
+        : null
+      return React.createElement(
+        'div', { key: group.caption, className: 'ts-set-group', 'data-open': expanded ? 'true' : 'false' },
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'ts-set-group-head',
+            'aria-expanded': expanded ? 'true' : 'false',
+            onClick: toggleGroup,
+          },
+          React.createElement('span', { className: 'ts-set-caption' }, group.caption),
+          chevronEl('ts-set-group-chevron'),
+        ),
+        expanded ? [...rows, cleanRow].filter(Boolean) : null,
       )
     })
 

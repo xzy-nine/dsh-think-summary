@@ -94,7 +94,12 @@ const PANEL_CSS = `
 .ts-set-card[data-open="true"] .ts-set-chevron{transform:rotate(180deg)}
 .ts-set-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}
 .ts-set-group{padding-top:4px}
-.ts-set-caption{color:var(--dsw-alias-label-secondary);margin:14px 0 0;font-size:12px;font-weight:500;line-height:18px}
+.ts-set-group-head{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:transparent;border:0;border-radius:6px;align-items:center;gap:8px;margin:12px 0 0;padding:4px 2px;display:flex}
+.ts-set-group-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-set-group-head:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.ts-set-caption{color:var(--dsw-alias-label-secondary);flex:1;font-size:12px;font-weight:500;line-height:18px}
+.ts-set-group-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s}
+.ts-set-group[data-open="true"] .ts-set-group-chevron{transform:rotate(180deg)}
 .ts-set-field{flex-direction:column;gap:6px;padding:12px 0;display:flex}
 .ts-set-field + .ts-set-field{border-top:1px solid var(--dsw-alias-border-l2)}
 .ts-set-head{align-items:center;gap:8px;display:flex}
