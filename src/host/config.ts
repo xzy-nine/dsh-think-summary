@@ -4,7 +4,10 @@
  */
 
 export interface ThinkSummaryConfig {
-  /** 总开关。 */
+  /**
+   * 插件总开关。关闭后不检测/不分段/不精炼/不注入提示词，
+   * 客户端也不渲染任何总结 UI（dock/tail/view）。
+   */
   enabled?: boolean
   /** 长思考判定阈值（thinking tokens）。 */
   thinkThresholdTokens?: number

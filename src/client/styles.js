@@ -117,10 +117,9 @@ const PANEL_CSS = `
 .ts-set-save{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}
 .ts-set-discard:disabled,.ts-set-save:disabled{opacity:.4;cursor:default}
 .ts-set-discard:focus-visible,.ts-set-save:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.ts-set-switch{appearance:none;cursor:pointer;background:transparent;border:0;padding:0;flex:none;position:relative;width:20px;height:10px;display:inline-block}
-.ts-set-switch-track{background:var(--dsw-alias-border-l2);width:20px;height:10px;transition:background-color .12s;border-radius:5px;display:inline-block;position:relative}
-.ts-set-switch[data-on="true"] .ts-set-switch-track{background:var(--dsw-alias-state-business-primary)}
-.ts-set-switch-thumb{background:var(--dsw-alias-bg-layer-1);width:6px;height:6px;transition:transform .12s;border-radius:50%;position:absolute;top:2px;left:2px}
-.ts-set-switch[data-on="true"] .ts-set-switch-thumb{transform:translate(10px)}
-.ts-set-switch:disabled{opacity:.5;cursor:default}
+.ts-set-toggle{position:relative;width:30px;height:17px;border-radius:9px;border:none;cursor:pointer;background:var(--dsw-alias-interactive-bg-hover);flex:none;padding:0;transition:background .12s}
+.ts-set-toggle[data-on="true"]{background:var(--dsw-alias-state-business-primary)}
+.ts-set-toggle-thumb{position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--dsw-alias-bg-layer-1);box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .12s}
+.ts-set-toggle[data-on="true"] .ts-set-toggle-thumb{left:15px}
+.ts-set-toggle:disabled{opacity:.5;cursor:default}
 `

@@ -25,14 +25,16 @@ export const PROMPT_SELF_SUMMARY =
  * systemPrompt 服务句柄——比 section 注册可靠。ctx.on 注册的监听随插件
  * 生命周期自动清理。
  */
-export function installSelfSummaryPrompt(ctx: { on?: (name: string, listener: (...args: any[]) => unknown) => unknown }, getOptions: () => { selfSummary?: 'off' | 'prompt' }): () => void {
+export function installSelfSummaryPrompt(ctx: { on?: (name: string, listener: (...args: any[]) => unknown) => unknown }, getOptions: () => { selfSummary?: 'off' | 'prompt'; enabled?: boolean }): () => void {
   const onAssemble = async (
     assembly: { sections?: Array<{ name: string; order: number; text: string; complete?: boolean }> } | undefined,
     _context: unknown,
     next: (assembly: unknown) => Promise<unknown>,
   ) => {
     try {
-      if (getOptions().selfSummary === 'prompt' && assembly && Array.isArray(assembly.sections)) {
+      const opts = getOptions()
+      if (opts.enabled === false) return next(assembly)
+      if (opts.selfSummary === 'prompt' && assembly && Array.isArray(assembly.sections)) {
         if (!assembly.sections.some((s) => s && s.name === 'think-summary:self')) {
           assembly.sections.push({ name: 'think-summary:self', order: 200, text: PROMPT_SELF_SUMMARY })
         }

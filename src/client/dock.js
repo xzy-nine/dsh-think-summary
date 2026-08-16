@@ -22,6 +22,7 @@ function makeInputDock() {
   return function ThinkInputDock(props) {
     const sessionId = props && props.sessionId
     const [state, setState] = React.useState(null)
+    const [enabled, setEnabled] = React.useState(true)
     const [open, setOpen] = React.useState(true)
     const [prevOpen, setPrevOpen] = React.useState(false)
     const [chatView, setChatView] = React.useState(true)
@@ -36,6 +37,7 @@ function makeInputDock() {
           if (!res.ok) return
           const json = await res.json()
           if (!alive) return
+          setEnabled(!json || json.enabled !== false)
           setState((json && json.state) || null)
         } catch {
           /* 轮询失败不影响聊天 */
@@ -52,6 +54,7 @@ function makeInputDock() {
       }
     }, [sessionId])
 
+    if (!enabled) return null // 插件总开关关闭：不显示实时思考面板
     if (!chatView) return null // 非"对话"视图：隐藏实时思考面板
 
     // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（常驻显示最近一次）

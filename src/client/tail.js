@@ -16,6 +16,7 @@ function makeThinkTail() {
     const turn = m && m.turn // TurnLocation（含 turn 号与 steps）
     const seq = m && m.seq
     const [thinks, setThinks] = React.useState([])
+    const [enabled, setEnabled] = React.useState(true)
     // 默认折叠：总结条收起，点击展开查看各思考分组
     const [open, setOpen] = React.useState(false)
 
@@ -30,6 +31,7 @@ function makeThinkTail() {
           if (!res.ok) return
           const json = await res.json()
           if (!alive) return
+          setEnabled(!json || json.enabled !== false)
           const state = json && json.state
           if (!state) return
           // 该 turn 的所有有段 think（区分每次思考：多 step 思考各自成组）
@@ -53,6 +55,7 @@ function makeThinkTail() {
       }
     }, [sessionId, turn])
 
+    if (!enabled) return null // 插件总开关关闭：不显示总结条
     if (thinks.length === 0) return null
 
     const totalSegs = thinks.reduce((n, t) => n + t.segments.length, 0)

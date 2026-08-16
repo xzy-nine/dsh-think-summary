@@ -52,6 +52,7 @@ function makeThinkSummaryView() {
   return function ThinkSummaryView(props) {
     const sessionId = props && props.sessionId
     const [state, setState] = React.useState(null)
+    const [enabled, setEnabled] = React.useState(true)
     const [openMap, setOpenMap] = React.useState(readOpenMap)
     const listRef = React.useRef(null)
     // 是否停在底部（用户滚动时由 scroll 事件实时更新；仅在底部时自动跟随）
@@ -69,6 +70,7 @@ function makeThinkSummaryView() {
           if (!res.ok) return
           const json = await res.json()
           if (!alive) return
+          setEnabled(!json || json.enabled !== false)
           setState((json && json.state) || null)
         } catch {
           /* 轮询失败不影响 */
@@ -148,6 +150,8 @@ function makeThinkSummaryView() {
         expanded ? React.createElement('div', { className: 'ts-view-body' }, ...segs) : null,
       )
     })
+
+    if (!enabled) return null // 插件总开关关闭：视图不显示
 
     return React.createElement(
       'div', { className: 'ts-view' },

@@ -8,12 +8,12 @@
  * 独立第三方插件必须自带 loopback 桥（docs/probe-notes.md §6）。
  */
 
-/** 设置卡片字段定义（与 Host schema 对齐；分组渲染）。 */
+/** 设置卡片字段定义（与 Host schema 对齐；分组渲染）。
+ * `enabled`（插件总开关）不在此列——它渲染为卡片顶部的独立总开关。 */
 const FIELD_GROUPS = [
   {
     caption: '检测与分段',
     fields: [
-      { key: 'enabled', label: '启用', kind: 'bool', hint: '总开关，关闭后停止检测' },
       { key: 'thinkThresholdTokens', label: '长思考阈值', kind: 'num', unit: 'tok', hint: '思考超过该长度判定为长思考并开始分段' },
       { key: 'segmentMinTokens', label: '段最小窗口', kind: 'num', unit: 'tok', hint: '达到后可切（等待语义边界信号）' },
       { key: 'segmentMaxTokens', label: '段硬上限', kind: 'num', unit: 'tok', hint: '到点强制切，保证缓冲有界' },
@@ -72,7 +72,7 @@ const FIELD_GROUPS = [
   },
 ]
 
-/** 原生小开关（对齐 trajectory controlTrack：track 20×10、thumb 6×6）。 */
+/** 开关（视觉 switch，实际是带 aria 的 button）——原来的大圆角开关样式。 */
 function makeToggle(on, onChange, disabled) {
   return React.createElement(
     'button',
@@ -83,10 +83,9 @@ function makeToggle(on, onChange, disabled) {
       'data-on': on ? 'true' : 'false',
       disabled: !!disabled,
       onClick: () => onChange(!on),
-      className: 'ts-set-switch',
+      className: 'ts-set-toggle',
     },
-    React.createElement('span', { className: 'ts-set-switch-track' },
-      React.createElement('span', { className: 'ts-set-switch-thumb' })),
+    React.createElement('span', { className: 'ts-set-toggle-thumb' }),
   )
 }
 
@@ -185,6 +184,8 @@ function makeSettingsCard(scope) {
         const v = snap.value || {}
         const b = snap.base || {}
         const next = {}
+        // 插件总开关（独立于分组，默认开）
+        next.enabled = v.enabled === undefined ? true : !!v.enabled
         for (const group of FIELD_GROUPS) {
           for (const f of group.fields) {
             next[f.key] = f.kind === 'bool'
@@ -218,6 +219,7 @@ function makeSettingsCard(scope) {
       setMsg('')
       setMsgKind('')
       try {
+        await scope.set('enabled', !!draft.enabled)
         for (const group of FIELD_GROUPS) {
           for (const f of group.fields) {
             if (f.kind === 'bool') {
@@ -253,6 +255,7 @@ function makeSettingsCard(scope) {
       setMsg('')
       setMsgKind('')
       try {
+        await scope.unset('enabled')
         for (const group of FIELD_GROUPS) for (const f of group.fields) await scope.unset(f.key)
         setMsgKind('ok')
         setMsg('已恢复默认')
@@ -265,10 +268,21 @@ function makeSettingsCard(scope) {
       }
     }
 
-    const groups = FIELD_GROUPS.map((group, gi) => {
+    // 插件总开关行（渲染在分组之上）：关闭后不检测/不精炼/不显示总结 UI
+    const disabled = busy || snap.writable === false
+    const masterField = React.createElement(
+      'div', { key: '__master__', className: 'ts-set-field' },
+      React.createElement(
+        'div', { className: 'ts-set-head' },
+        React.createElement('label', { className: 'ts-set-label' }, '启用插件'),
+        makeToggle(!!draft.enabled, (next) => setField('enabled', next), disabled),
+      ),
+      React.createElement('p', { className: 'ts-set-hint' }, '插件总开关：关闭后停止检测与分段（含精炼），输入框上方与对话中的总结卡片都不显示'),
+    )
+
+    const groups = FIELD_GROUPS.map((group) => {
       const rows = group.fields.map((f) => {
         const value = draft[f.key]
-        const disabled = busy || snap.writable === false
 
         // label 行：label + 单位 pill（bool 时右侧放开关）
         const headRight = f.kind === 'bool'
@@ -343,6 +357,7 @@ function makeSettingsCard(scope) {
       open
         ? React.createElement(
             'div', { className: 'ts-set-body' },
+            masterField,
             ...groups,
             React.createElement(
               'div', { className: 'ts-set-footer' },

@@ -17,6 +17,7 @@ const NS = settingsNamespace('think-summary')
 
 /** 设置 schema（schemastery）；loader 应用默认值，设置页编辑同一命名空间。 */
 const Config = z.object({
+  /** 插件总开关：关闭后不检测、不精炼、不注入提示词，客户端也不渲染任何总结 UI。 */
   enabled: z.boolean().default(true),
   thinkThresholdTokens: z.number().default(2000),
   filterNonAgentLoop: z.boolean().default(true),
@@ -91,7 +92,7 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   }
 
   installDetect(ctx, store, () => getConfig(), refine)
-  installRpc(ctx, store)
+  installRpc(ctx, store, () => getConfig())
   installSettingsRpc(ctx, store)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 
