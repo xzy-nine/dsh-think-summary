@@ -25,6 +25,8 @@ export interface RefineOptions {
   refinePrompt?: string
   /** 并行精炼数（并发执行，任务之间互不打断）。 */
   refineConcurrency?: number
+  /** 单任务超时（秒）：卡死任务超时放弃并释放并发位，防排队任务永不执行。 */
+  refineTimeout?: number
   /**
    * 输入裁剪策略：'headtail' 头尾裁剪（保头+尾、丢中段）；
    * 'tail' 仅保尾部；'full' 完整保留（不裁剪）。头尾裁剪同预算信息量更高，
@@ -195,7 +197,15 @@ export class RefineQueue {
         o.model && o.model !== 'auto'
           ? o.model
           : await resolveModel(llm, task.provider, task.fallbackModel)
-      const res = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024)
+      // 超时兜底：任务卡死（llm 永不返回）时不占死并发位——超时放弃该任务
+      // 并释放空位，后续排队任务继续（否则并发位被卡死任务占满，排队的段永不精炼）
+      const timeoutMs = (o.refineTimeout ?? 60) * 1000
+      const res = await Promise.race([
+        this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
+        }),
+      ])
       if (res && res.text.length > 0) {
         this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
           input: res.inputTokens,
@@ -204,7 +214,7 @@ export class RefineQueue {
       }
     } catch (error) {
       // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求与其他任务；
-      // 记录失败便于排查"未精炼"的段
+      // 记录失败便于排查"未精炼"的段（含超时）
       // eslint-disable-next-line no-console
       console.error(
         '[dsh-think-summary] refine failed:',

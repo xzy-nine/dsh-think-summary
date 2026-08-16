@@ -48,6 +48,7 @@ const FIELD_GROUPS = [
       },
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
       { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
+      { key: 'refineTimeout', label: '精炼超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死任务超时放弃并释放并发位' },
       { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
       { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
     ],
