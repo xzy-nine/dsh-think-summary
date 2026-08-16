@@ -50,7 +50,10 @@ export interface ThinkState {
   nextThinkId: number
 }
 
+/** 无段会话的清理 TTL（10 分钟空闲即清）。 */
 const TTL_MS = 10 * 60 * 1000
+/** 有思考总结段的会话保留更久（回看历史消息仍能显示总结条）。 */
+const TTL_SEG_MS = 60 * 60 * 1000
 
 export class ThinkStateStore {
   private map = new Map<string, ThinkState>()
@@ -130,7 +133,11 @@ export class ThinkStateStore {
   sweep(now = Date.now()): number {
     let removed = 0
     for (const [k, s] of this.map) {
-      if (!s.active && now - s.updatedAt > TTL_MS) {
+      if (s.active) continue
+      const idle = now - s.updatedAt
+      // 有思考总结段的会话保留更久（回看历史消息仍能显示总结条）
+      const hasSegs = s.thinks.some((t) => t.segments.length > 0)
+      if (idle > (hasSegs ? TTL_SEG_MS : TTL_MS)) {
         this.map.delete(k)
         removed++
       }
