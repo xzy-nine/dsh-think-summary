@@ -69,17 +69,11 @@ export interface SavedThinkState {
 }
 
 export class ThinkStateStore {
-  /** 实例唯一 id（诊断：确认产生段的 store 与 persist 监听的 store 是否同一实例）。 */
-  readonly instanceId: string
   private map = new Map<string, ThinkState>()
   /** 最近活跃会话（侧边栏面板缺省 sessionId 时使用）。 */
   private lastActiveSessionId: string | undefined
-  /** 状态变更监听（持久化防抖写盘用）。 */
+  /** 状态变更监听（持久化写盘用）。 */
   private listeners = new Set<() => void>()
-
-  constructor(instanceId = Math.random().toString(36).slice(2, 8)) {
-    this.instanceId = instanceId
-  }
 
   get(sessionId: string): ThinkState | undefined {
     return this.map.get(sessionId)
@@ -266,15 +260,5 @@ export class ThinkStateStore {
     }
     if (removed > 0) this.notify()
     return removed
-  }
-
-  /** 当前内存会话数（持久化写盘判断用）。 */
-  get size(): number {
-    return this.map.size
-  }
-
-  /** 按 sessionId 定位（供 RPC 汇报清理对象）。 */
-  has(sessionId: string): boolean {
-    return this.map.has(sessionId)
   }
 }

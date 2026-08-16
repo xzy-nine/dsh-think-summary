@@ -50,11 +50,10 @@ function segHeadLabel(s, prefix) {
 }
 
 /**
- * 轮询会话思考状态（dock/tail/view 共用）。
+ * 轮询会话思考状态（dock/views 共用）。
  * 每 1.5s fetch STATE_ROUTE；返回 { state, enabled }。
- * stopWhen：可选——返回 true 时停止轮询（tail 找到目标即停）。
  */
-function useThinkState(sessionId, stopWhen) {
+function useThinkState(sessionId) {
   const [state, setState] = React.useState(null)
   const [enabled, setEnabled] = React.useState(true)
   React.useEffect(() => {
@@ -73,7 +72,6 @@ function useThinkState(sessionId, stopWhen) {
         /* 轮询失败不影响 */
       } finally {
         if (!alive) return
-        if (typeof stopWhen === 'function' && stopWhen(state)) return // 目标已达成：停止
         timer = setTimeout(poll, 1500)
       }
     }

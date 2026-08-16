@@ -14,7 +14,6 @@ function makeThinkTail() {
     const sessionId = props && props.sessionId
     const m = props && props.matched
     const turn = m && m.turn // TurnLocation（含 turn 号与 steps）
-    const seq = m && m.seq
     const [thinks, setThinks] = React.useState([])
     const [enabled, setEnabled] = React.useState(true)
     // 默认折叠：总结条收起，点击展开查看各思考分组

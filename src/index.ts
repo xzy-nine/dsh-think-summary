@@ -97,7 +97,7 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
 
   installDetect(ctx, store, () => getConfig(), refine)
   installRpc(ctx, store, () => getConfig())
-  installSettingsRpc(ctx, store)
+  installSettingsRpc(ctx)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 
   // 持久化：思考总结保存到磁盘（重启后仍显示）+ 已归档会话清理（手动/自动）

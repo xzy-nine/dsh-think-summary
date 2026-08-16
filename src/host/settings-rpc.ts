@@ -1,4 +1,3 @@
-import type { ThinkStateStore } from './state.js'
 import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
 import type { CtxLike } from './ctx.js'
 
@@ -35,7 +34,7 @@ interface SettingsOp {
   value?: unknown
 }
 
-export function installSettingsRpc(ctx: CtxLike, store: ThinkStateStore): void {
+export function installSettingsRpc(ctx: CtxLike): void {
   const settings = (): SettingsLike | undefined => ctx.get('settings') as SettingsLike | undefined
 
   /** 命名空间视图：{ ns, value, base, user, revision, writable }。 */

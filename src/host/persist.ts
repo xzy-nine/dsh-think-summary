@@ -26,18 +26,11 @@ const DAY_MS = 24 * 60 * 60 * 1000
 /** 手动清理默认宽限：保留最近 1 天的有段会话（防误清刚结束的思考总结）。 */
 const DEFAULT_CLEAR_GRACE_MS = 24 * 60 * 60 * 1000
 
-export interface PersistHandle {
-  /** 立即写盘（幂等；同步）。 */
-  flush(): void
-  /** 手动清理已归档会话；返回移除数。 */
-  clearArchived(graceMs?: number): number
-}
-
 export function installPersist(
   ctx: CtxLike,
   store: ThinkStateStore,
   getOptions: () => ThinkSummaryConfig,
-): PersistHandle {
+): void {
   const file = join(homedir(), '.dsh', FILE_NAME)
 
   const readSaved = (): ReturnType<ThinkStateStore['exportAll']> | undefined => {
@@ -61,11 +54,8 @@ export function installPersist(
       const tmp = `${file}.tmp`
       writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
       renameSync(tmp, file)
-      // eslint-disable-next-line no-console
-      console.log(`[dsh-think-summary] persist OK pid=${process.pid}: ${payload.sessions.length} sessions -> ${file}`)
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[dsh-think-summary] persist FAIL:', error instanceof Error ? error.message : String(error))
+    } catch {
+      /* 写盘失败仅影响持久化，不影响运行时 */
     }
   }
 
@@ -92,9 +82,6 @@ export function installPersist(
     const removed = store.clearArchived(days * DAY_MS)
     if (removed > 0) writeNow() // 清理后落盘
   }
-  // 注意：不能用 ctx.effect 包装 store.onChange 的清理——Cordis 的 fiber effect 在
-  // apply 返回后即执行 disposer，会把 onChange 监听器立即移除（listeners=0，永不写盘）。
-  // store.onChange 与 timer.interval 的生命周期都随插件实例，无需手动 dispose。
   timer?.interval?.(autoClean, CLEAN_INTERVAL_MS)
 
   // 手动清理 RPC
@@ -117,13 +104,4 @@ export function installPersist(
       },
     })
   })
-
-  return {
-    flush: writeNow,
-    clearArchived: (graceMs = DEFAULT_CLEAR_GRACE_MS) => {
-      const n = store.clearArchived(graceMs)
-      if (n > 0) writeNow()
-      return n
-    },
-  }
 }
