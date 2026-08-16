@@ -16,7 +16,8 @@ function makeThinkTail() {
     const turn = m && m.turn // TurnLocation（含 turn 号与 steps）
     const seq = m && m.seq
     const [thinks, setThinks] = React.useState([])
-    const [open, setOpen] = React.useState(true)
+    // 默认折叠：总结条收起，点击展开查看各思考分组
+    const [open, setOpen] = React.useState(false)
 
     React.useEffect(() => {
       if (!sessionId || !turn) return undefined
