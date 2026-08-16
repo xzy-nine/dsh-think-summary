@@ -137,5 +137,28 @@ segT.flush()
 ok('ignore：产出表格元信息（行数=4）', metasT.some((m) => m.kind === 'table' && m.lines === 4))
 ok('ignore：产出段不含表格内容', segsT.every((s) => !s.text.includes('| a |')))
 
+// ---------- 8. rawTokens：忽略的代码/表格 token 计入原始 token，但段 tokens 不变 ----------
+console.log('\n[8] rawTokens 口径（显示用：含被忽略的代码/表格；段 tokens 不变）')
+const rawSegs = []
+const rawSeg = new Segmenter(
+  { segmentMinTokens: 40, segmentMaxTokens: 400, codeMode: 'ignore', tableMode: 'ignore' },
+  (t, tokens, meta, isTail, rawTokens) => rawSegs.push({ text: t, tokens, meta, rawTokens }),
+)
+const rawText =
+  '散文开头，需要足够文字跨越最小窗口并形成独立段，这里补充内容确保超过下限，作为代码块之前的独立段落。\n' +
+  '```py\n' + 'print(1)\nprint(2)\nprint(3)\n' + '```\n' +
+  '代码块之后的散文收尾，继续补充文字确保这一段的原始 token 包含被忽略的代码行内容，这里需要写足够长的一段文字让它超过尾部下限不会被丢弃，再继续补充一些论述文字保证这段的 token 数量明显超过最小尾巴，这样才能验证被忽略的代码行被完整计入原始 token 口径。\n'
+for (let i = 0; i < rawText.length; i += 5) rawSeg.feed(rawText.slice(i, i + 5))
+rawSeg.flush()
+const rawHasCodeSeg = rawSegs.find((s) => s.rawTokens !== undefined && s.rawTokens > s.tokens)
+ok('ignore：至少一段 rawTokens > tokens（代码被计入原始 token）', rawHasCodeSeg !== undefined,
+  JSON.stringify(rawSegs.map((s) => ({ t: s.tokens, r: s.rawTokens }))))
+ok('rawTokens 不减小于段 tokens（口径单调）', rawSegs.every((s) => (s.rawTokens ?? s.tokens) >= s.tokens))
+
+// ---------- 9. 兜底路径（segmentText）：无 ignore，rawTokens 未设置 ----------
+console.log('\n[9] 兜底路径（segmentText 静态）不产出 rawTokens（客户端回退段 tokens）')
+const fallbackSegs = segmentText(rawText, { segmentMinTokens: 40, segmentMaxTokens: 400 })
+ok('静态段无 rawTokens 字段', fallbackSegs.every((s) => !('rawTokens' in s)))
+
 console.log(failed === 0 ? '\n全部通过 ✅' : `\n${failed} 项失败 ❌`)
 process.exit(failed === 0 ? 0 : 1)

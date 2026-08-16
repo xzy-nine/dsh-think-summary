@@ -59,7 +59,7 @@ export function installDetect(
         // 不传 onMeta：ignore 模式下代码块/表格内容丢弃即可，总结卡片不显示任何
         // 代码块/表格痕迹（用户需求：改为不显示；keep 模式走下方 sink 产出内容段）
       },
-      (text: string, tokens: number, meta, isTail?: boolean) => {
+      (text: string, tokens: number, meta, isTail?: boolean, rawTokens?: number) => {
         // 门控保证 cut 只发生在 inSplice 之后；state 级去重防重试/重放
         const h = hashText(text)
         if (state.hashes.has(h)) return
@@ -78,6 +78,8 @@ export function installDetect(
           index: idx,
           summary: choice.summary,
           tokens,
+          // 原始 token = 段文本 + 本段之前被忽略的代码/表格 token（精炼前/忽略前口径）
+          rawTokens: rawTokens ?? tokens,
           refined: false,
           skipReason: choice.skipReason,
           unrefinedReason:

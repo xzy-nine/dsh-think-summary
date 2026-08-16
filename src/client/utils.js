@@ -38,9 +38,15 @@ function refineTokStr(s) {
   return total > 0 ? ' · 精炼 ~' + fmtTok(total) + ' tok' : ''
 }
 
-/** 段头标签：主模型小结 → "小结"；普通段 → "原始 X tok[ · 精炼 ~Y tok]"。 */
+/**
+ * 段头标签：主模型小结 → "小结"；普通段 → "原始 X tok[ · 精炼 ~Y tok]"。
+ * 原始 token 用 rawTokens（段文本 + 本段之前被忽略的代码/表格 token，
+ * 精炼前/忽略前的完整口径）；无 rawTokens 时回退到段文本 token。
+ */
 function segHeadLabel(s, prefix) {
-  return prefix + '第' + (s.index + 1) + '段 · ' + (s.kind === 'self' ? '小结' : '原始 ' + fmtTok(s.tokens) + ' tok' + refineTokStr(s))
+  if (s && s.kind === 'self') return prefix + '第' + (s.index + 1) + '段 · 小结'
+  const raw = (s && (s.rawTokens ?? s.tokens)) || 0
+  return prefix + '第' + (s.index + 1) + '段 · 原始 ' + fmtTok(raw) + ' tok' + refineTokStr(s)
 }
 
 /**

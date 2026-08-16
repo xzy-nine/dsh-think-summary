@@ -35,7 +35,11 @@ export interface SegmentOptions {
 }
 
 export interface SegmentSink {
-  onSegment(text: string, tokens: number, meta: SegmentMeta, isTail?: boolean): void
+  /**
+   * @param rawTokens 该段对应的**原始 token**（含 ignore 模式下被忽略的代码/表格
+   * token + 精炼输入裁剪前的完整段文本 token）；无忽略内容时等于 tokens。
+   */
+  onSegment(text: string, tokens: number, meta: SegmentMeta, isTail?: boolean, rawTokens?: number): void
 }
 
 export interface SegmentPiece {
@@ -75,7 +79,7 @@ export class Segmenter {
   private readonly min: number
   private readonly max: number
   private readonly canCut: (() => boolean) | undefined
-  private readonly emit: (text: string, tokens: number, meta: SegmentMeta, isTail?: boolean) => void
+  private readonly emit: (text: string, tokens: number, meta: SegmentMeta, isTail?: boolean, rawTokens?: number) => void
   private readonly onMeta: ((info: { kind: 'code' | 'table'; lines: number; lang?: string }) => void) | undefined
   private readonly codeMode: 'ignore' | 'keep'
   private readonly tableMode: 'ignore' | 'keep'
@@ -84,13 +88,17 @@ export class Segmenter {
   private ignore: 'none' | 'fence' | 'table' = 'none'
   private metaLines = 0
   private metaLang = ''
+  /** ignore 模式：当前忽略区累计的 token（代码/表格内容 token，未写缓冲但计入原始 token）。 */
+  private ignoreTokens = 0
+  /** ignore 模式：已结束忽略区的 token（待并入下一个切段的原始 token）。 */
+  private pendingIgnoreTokens = 0
   /** keep 模式状态：当前是否在代码/表格块内（内容保留、原子）。 */
   private inCode = false
   private inTable = false
 
   constructor(
     options: SegmentOptions = {},
-    sink: SegmentSink | ((text: string, tokens: number, meta: SegmentMeta) => void),
+    sink: SegmentSink | ((text: string, tokens: number, meta: SegmentMeta, isTail?: boolean, rawTokens?: number) => void),
   ) {
     this.min = options.segmentMinTokens ?? 1500
     this.max = options.segmentMaxTokens ?? 3000
@@ -98,7 +106,10 @@ export class Segmenter {
     this.codeMode = options.codeMode ?? 'keep'
     this.tableMode = options.tableMode ?? 'keep'
     this.onMeta = options.onMeta
-    this.emit = typeof sink === 'function' ? sink : (text, tokens, meta) => sink.onSegment(text, tokens, meta)
+    this.emit = typeof sink === 'function'
+      ? sink
+      : (text: string, tokens: number, meta: SegmentMeta, isTail?: boolean, rawTokens?: number) =>
+          sink.onSegment(text, tokens, meta, isTail, rawTokens)
   }
 
   private tokenCount(): number {
@@ -161,9 +172,12 @@ export class Segmenter {
     if (this.ignore === 'fence') {
       if (FENCE_RE.test(line)) {
         this.ignore = 'none'
+        this.pendingIgnoreTokens += this.ignoreTokens
+        this.ignoreTokens = 0
         this.onMeta?.({ kind: 'code', lines: this.metaLines, lang: this.metaLang || undefined })
       } else {
         this.metaLines++
+        this.ignoreTokens += this.lineTokens(line) // 代码行 token 计入原始 token
       }
       return
     }
@@ -171,9 +185,12 @@ export class Segmenter {
       const k = classifyLine(line, false).kind
       if (k === 'table' || k === 'table-sep' || k === 'blank') {
         this.metaLines++
+        this.ignoreTokens += this.lineTokens(line) // 表格行 token 计入原始 token
         return
       }
       this.ignore = 'none'
+      this.pendingIgnoreTokens += this.ignoreTokens
+      this.ignoreTokens = 0
       this.onMeta?.({ kind: 'table', lines: this.metaLines })
       // fallthrough：该行作为正常内容行处理
     }
@@ -247,8 +264,16 @@ export class Segmenter {
     this.other += r.other
   }
 
+  /** 单行原始 token 估算（CJK≈1/字符，其余≈4/字符，与 estimateTokens 同口径）。 */
+  private lineTokens(line: string): number {
+    const r = countRaw(line)
+    return Math.round(r.cjk + r.other / 4)
+  }
+
   /** 在指定位置切段（默认切到尾）；剩余文本续接为下一段。
-   *  isTail：flush 切出的末尾段（可能 < min，仍保留并精炼——末尾结论不丢）。 */
+   *  isTail：flush 切出的末尾段（可能 < min，仍保留并精炼——末尾结论不丢）。
+   *  rawTokens = 段文本 token + 本段之前已结束忽略区（代码/表格）的 token，
+   *  即"精炼前/忽略前"的完整原始 token。 */
   private cutBuf(pos = this.buf.length, isTail = false): void {
     const text = this.buf.slice(0, pos).trim()
     const rest = this.buf.slice(pos)
@@ -256,11 +281,13 @@ export class Segmenter {
     const r = countRaw(rest)
     this.cjk = r.cjk
     this.other = r.other
-    if (!text) return
+    if (!text) return // 空段不吞忽略 token（pendingIgnoreTokens 留给下一段）
     const h = hashText(text)
     if (h === this.lastHash) return
     this.lastHash = h
-    this.emit(text, estimateTokens(text), analyzeMeta(text), isTail)
+    const rawTokens = estimateTokens(text) + this.pendingIgnoreTokens
+    this.pendingIgnoreTokens = 0
+    this.emit(text, estimateTokens(text), analyzeMeta(text), isTail, rawTokens)
   }
 
   /** max 切点：优先句末回退，其次行末，最后当前位置。 */
@@ -282,6 +309,8 @@ export class Segmenter {
     if (this.ignore !== 'none') {
       if (this.ignore === 'fence') this.onMeta?.({ kind: 'code', lines: this.metaLines, lang: this.metaLang || undefined })
       else this.onMeta?.({ kind: 'table', lines: this.metaLines })
+      this.pendingIgnoreTokens += this.ignoreTokens
+      this.ignoreTokens = 0
       this.ignore = 'none'
     }
     if (this.inCode) {
@@ -308,6 +337,8 @@ export class Segmenter {
     if (this.ignore !== 'none') {
       if (this.ignore === 'fence') this.onMeta?.({ kind: 'code', lines: this.metaLines, lang: this.metaLang || undefined })
       else this.onMeta?.({ kind: 'table', lines: this.metaLines })
+      this.pendingIgnoreTokens += this.ignoreTokens
+      this.ignoreTokens = 0
       this.ignore = 'none'
     }
     if (this.inCode) {

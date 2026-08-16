@@ -8,7 +8,10 @@
 export interface SegmentSummary {
   index: number
   summary: string
+  /** 段文本 token（进缓冲的内容）。 */
   tokens: number
+  /** 原始 token = 段文本 + 本段之前被忽略的代码/表格 token（精炼前/忽略前口径）。 */
+  rawTokens?: number
   refined: boolean
   /** 'code'/'table' = 结构化摘要已足够，未调小模型精炼（省 token）。 */
   skipReason?: 'code' | 'table'
