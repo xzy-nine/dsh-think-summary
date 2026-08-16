@@ -192,10 +192,14 @@ export class ThinkStateStore {
     return this.lastActiveSessionId
   }
 
-  /** 导出全部会话（持久化写盘；剥离运行时字段，保留 think 分组与段）。 */
+  /** 导出全部会话（持久化写盘；剥离运行时字段，保留 think 分组与段）。
+   *  只导出**有段输出**的会话——与 loadAll 的恢复规则对称，
+   *  文件只含真正的思考总结（空段会话不占磁盘）。 */
   exportAll(): SavedThinkState[] {
     const out: SavedThinkState[] = []
     for (const s of this.map.values()) {
+      const hasSegs = s.thinks.some((t) => t.segments && t.segments.length > 0)
+      if (!hasSegs) continue
       out.push({
         sessionId: s.sessionId,
         thinkingTokens: s.thinkingTokens,

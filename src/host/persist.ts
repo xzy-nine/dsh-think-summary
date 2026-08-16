@@ -16,8 +16,8 @@ import type { CtxLike } from './ctx.js'
 import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
 
 const FILE_NAME = 'dsh-think-summary.json'
-/** 写盘防抖（毫秒）。 */
-const SAVE_DEBOUNCE_MS = 2000
+/** 写盘防抖（毫秒）：状态变更后合并写，避免高频 IO。 */
+const SAVE_DEBOUNCE_MS = 500
 /** 自动清理检查周期（毫秒）。 */
 const CLEAN_INTERVAL_MS = 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -88,8 +88,20 @@ export function installPersist(
   }
   const offInterval = timer?.interval?.(autoClean, CLEAN_INTERVAL_MS)
 
+  // 进程退出兜底：dsh 被强杀/异常退出时也能落盘（writeFileSync 同步）。
+  // 注意：exit 事件中不能再注册异步 timer，只能同步写。
+  const onExit = () => {
+    if (saveTimer !== null) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    writeNow()
+  }
+  process.on('exit', onExit)
+
   // 生命周期清理：卸载时立即写盘并释放监听/定时器
   const dispose = () => {
+    process.removeListener('exit', onExit)
     offChange?.()
     if (typeof offInterval === 'function') offInterval()
     if (saveTimer !== null) {
