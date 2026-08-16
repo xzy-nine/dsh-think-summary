@@ -61,14 +61,22 @@ export function installPersist(
       const tmp = `${file}.tmp`
       writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
       renameSync(tmp, file)
-    } catch {
-      /* 写盘失败仅影响持久化，不影响运行时 */
+      // eslint-disable-next-line no-console
+      console.log(`[dsh-think-summary] persist OK: ${payload.sessions.length} sessions -> ${file}`)
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[dsh-think-summary] persist FAIL:', error instanceof Error ? error.message : String(error))
     }
   }
 
   // 启动加载：仅当持久化开启（默认开）。
   if (getOptions().persistEnabled !== false) {
     store.loadAll(readSaved())
+    // eslint-disable-next-line no-console
+    console.log(`[dsh-think-summary] persist loaded, store size=${store.size}`)
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('[dsh-think-summary] persist disabled by config')
   }
 
   // 状态变更 → **同步立即写**（不防抖）：begin/end/push/清理每次都落盘。
