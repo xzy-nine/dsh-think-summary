@@ -6,15 +6,16 @@ const NS = 'think-summary'
 const STATE_ROUTE = '/api/think-summary/state'
 const SETTINGS_PREFIX = '/api/think-summary/settings'
 
-/** 主题变量（带降级）。 */
+/** 主题变量（对齐原生 dsh 设计令牌，带降级）。 */
 const T = {
   border: 'var(--dsw-alias-border-l2, rgba(128,128,128,.28))',
-  bg: 'var(--dsw-alias-bg-layer-2, rgba(128,128,128,.07))',
+  bg: 'var(--dsw-alias-bg-layer-3, rgba(128,128,128,.07))',
   text: 'var(--dsw-alias-label-primary, inherit)',
   dim: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.85))',
-  accent: 'var(--dsw-alias-button-info-fill, #4a9eff)',
+  accent: 'var(--dsw-alias-state-business-primary, #4a9eff)',
   hover: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))',
-  ok: 'var(--dsw-alias-success-fill, #34c759)',
-  err: 'var(--dsw-alias-danger-fill, #ff5f57)',
-  warn: '#ffd60a',
+  ok: 'var(--dsw-alias-state-success-primary, #34c759)',
+  err: 'var(--dsw-alias-state-error-primary, #ff5f57)',
+  warn: 'var(--dsw-alias-state-warn-primary, #ffd60a)',
+  badge: 'var(--dsw-alias-bg-module-platform, rgba(128,128,128,.12))',
 }

@@ -143,7 +143,7 @@ function makeThinkSummaryView() {
             fmtTok(t.tokens) + ' tok · ' + t.segments.length + ' 段' +
             (t.turn !== undefined ? ' · turn ' + t.turn : ''),
           ),
-          refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined', style: { fontSize: 11 } }, refinedCount + ' 段已精炼') : null,
+          refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined' }, refinedCount + ' 段已精炼') : null,
         ),
         expanded ? React.createElement('div', { className: 'ts-view-body' }, ...segs) : null,
       )

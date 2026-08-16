@@ -143,7 +143,7 @@ function makeInputDock() {
                 : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
           ),
           active ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
-          refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined', style: { fontSize: 11 } }, refinedCount + ' 段已精炼') : null,
+          refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined' }, refinedCount + ' 段已精炼') : null,
         ),
         open ? React.createElement('div', { className: 'ts-dock-body' }, body) : null,
       ),

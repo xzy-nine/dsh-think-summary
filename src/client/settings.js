@@ -1,5 +1,9 @@
 /**
  * 设置卡片（settings.plugin.item 槽位）：默认折叠；分组字段 + 控件 + 保存/恢复。
+ * 布局与视觉对齐**原生 dsh 设置卡**（PluginCard + ValueField）：
+ *  - 卡片 radius 12、展开 bg-layer-2、hover 边框 dimmed
+ *  - 字段纵向：label 行（label + 单位 pill）→ 控件（34px 输入/下拉/文本域）→ hint
+ *  - 保存 = 反色主按钮，恢复 = 描边次按钮；bool = 原生小开关
  * 数据经自建设置桥（createBridgeScope）读写——官方桥只服务白名单命名空间，
  * 独立第三方插件必须自带 loopback 桥（docs/probe-notes.md §6）。
  */
@@ -68,7 +72,7 @@ const FIELD_GROUPS = [
   },
 ]
 
-/** 开关（视觉 switch，实际是带 aria 的 button）。 */
+/** 原生小开关（对齐 trajectory controlTrack：track 20×10、thumb 6×6）。 */
 function makeToggle(on, onChange, disabled) {
   return React.createElement(
     'button',
@@ -76,40 +80,13 @@ function makeToggle(on, onChange, disabled) {
       type: 'button',
       role: 'switch',
       'aria-checked': on ? 'true' : 'false',
+      'data-on': on ? 'true' : 'false',
       disabled: !!disabled,
       onClick: () => onChange(!on),
-      style: {
-        width: 30, height: 17, borderRadius: 9, border: 'none', cursor: disabled ? 'default' : 'pointer',
-        background: on ? T.accent : T.hover, position: 'relative', flex: 'none',
-        opacity: disabled ? 0.5 : 1, padding: 0, transition: 'background .12s',
-      },
+      className: 'ts-set-switch',
     },
-    React.createElement('span', {
-      style: {
-        position: 'absolute', top: 2, left: on ? 15 : 2, width: 13, height: 13, borderRadius: '50%',
-        background: '#fff', transition: 'left .12s', boxShadow: '0 1px 2px rgba(0,0,0,.3)',
-      },
-    }),
-  )
-}
-
-function makeButton(label, kind, onClick, disabled) {
-  const primary = kind === 'primary'
-  return React.createElement(
-    'button',
-    {
-      type: 'button',
-      disabled: !!disabled,
-      onClick,
-      style: {
-        padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: disabled ? 'default' : 'pointer',
-        border: primary ? 'none' : '1px solid ' + T.border,
-        background: primary ? T.accent : 'transparent',
-        color: primary ? '#fff' : T.text,
-        opacity: disabled ? 0.5 : 1,
-      },
-    },
-    label,
+    React.createElement('span', { className: 'ts-set-switch-track' },
+      React.createElement('span', { className: 'ts-set-switch-thumb' })),
   )
 }
 
@@ -185,7 +162,7 @@ function createBridgeScope() {
   }
 }
 
-/** 设置卡片：默认折叠，点头部展开；分组字段 + 开关/单位/按钮/状态。 */
+/** 设置卡片：默认折叠，点头部展开；对齐原生 PluginCard + ValueField 布局。 */
 function makeSettingsCard(scope) {
   return function SettingsCard() {
     const [snap, setSnap] = React.useState(null)
@@ -222,25 +199,14 @@ function makeSettingsCard(scope) {
 
     if (!snap || snap.status === 'loading') return null
 
-    const card = { border: '1px solid ' + T.border, borderRadius: 6, background: T.bg, overflow: 'hidden', color: T.text }
-    const titleStyle = { fontSize: 14, fontWeight: 600, color: T.text }
-    const descStyle = { fontSize: 12.5, color: T.dim, lineHeight: 1.4 }
-    const chevron = (expanded) => ({
-      flex: 'none', marginLeft: 10, fontSize: 13, color: T.dim,
-      transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform .12s',
-    })
-    const headerStyle = {
-      width: '100%', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer',
-      background: 'transparent', border: 'none', justifyContent: 'space-between',
-      alignItems: 'center', padding: '12px 14px', display: 'flex', gap: 10,
-    }
-
     if (snap.status === 'unavailable') {
       return React.createElement(
-        'div', { style: card },
-        React.createElement('div', { style: { padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3 } },
-          React.createElement('div', { style: titleStyle }, 'think-summary'),
-          React.createElement('div', { style: descStyle }, '设置桥不可用：宿主未运行本插件的 Host 半面。'),
+        'div', { className: 'ts-set-card' },
+        React.createElement('div', { className: 'ts-set-header' },
+          React.createElement('div', { className: 'ts-set-headText' },
+            React.createElement('span', { className: 'ts-set-name' }, 'think-summary'),
+            React.createElement('span', { className: 'ts-set-desc' }, '设置桥不可用：宿主未运行本插件的 Host 半面。'),
+          ),
         ),
       )
     }
@@ -299,105 +265,94 @@ function makeSettingsCard(scope) {
       }
     }
 
-    const groups = FIELD_GROUPS.map((group) => {
+    const groups = FIELD_GROUPS.map((group, gi) => {
       const rows = group.fields.map((f) => {
         const value = draft[f.key]
-        let control
-        if (f.kind === 'bool') {
-          control = makeToggle(!!value, (next) => setField(f.key, next), busy || snap.writable === false)
-        } else if (f.kind === 'num') {
-          control = React.createElement(
-            'div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-            React.createElement('input', {
-              type: 'number',
-              value: value ?? '',
-              disabled: busy || snap.writable === false,
-              onChange: (e) => setField(f.key, e.target.value),
-              title: f.hint,
-              style: {
-                width: 96, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
-                background: 'transparent', color: T.text, fontSize: 12.5,
-              },
-            }),
-            f.unit ? React.createElement('span', { style: { fontSize: 11, color: T.dim } }, f.unit) : null,
-          )
+        const disabled = busy || snap.writable === false
+
+        // label 行：label + 单位 pill（bool 时右侧放开关）
+        const headRight = f.kind === 'bool'
+          ? makeToggle(!!value, (next) => setField(f.key, next), disabled)
+          : f.unit
+            ? React.createElement('span', { className: 'ts-set-unit' }, f.unit)
+            : null
+        const head = React.createElement(
+          'div', { className: 'ts-set-head' },
+          React.createElement('label', { className: 'ts-set-label' }, f.label),
+          headRight,
+        )
+
+        // 控件：bool 无独立控件行（开关在 label 行）；其余 34px 控件在 label 下
+        let control = null
+        if (f.kind === 'num') {
+          control = React.createElement('input', {
+            type: 'text', inputMode: 'numeric', className: 'ts-set-input', value: value ?? '',
+            disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
+          })
         } else if (f.kind === 'area') {
           control = React.createElement('textarea', {
-            value: value ?? '',
-            rows: 3,
-            disabled: busy || snap.writable === false,
-            onChange: (e) => setField(f.key, e.target.value),
-            title: f.hint,
-            style: {
-              width: 210, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
-              background: 'transparent', color: T.text, fontSize: 12.5, resize: 'vertical', lineHeight: 1.4,
-            },
+            className: 'ts-set-textarea', rows: 3, value: value ?? '',
+            disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
           })
         } else if (f.kind === 'enum') {
           control = React.createElement(
             'select',
             {
-              value: value || (f.options && f.options[0] ? f.options[0][0] : ''),
-              disabled: busy || snap.writable === false,
-              onChange: (e) => setField(f.key, e.target.value),
-              title: f.hint,
-              style: {
-                width: 210, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
-                background: 'transparent', color: T.text, fontSize: 12.5,
-              },
+              className: 'ts-set-input', value: value || (f.options && f.options[0] ? f.options[0][0] : ''),
+              disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
             },
             (f.options || []).map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
           )
         } else {
           control = React.createElement('input', {
-            type: 'text',
-            value: value ?? '',
-            disabled: busy || snap.writable === false,
-            onChange: (e) => setField(f.key, e.target.value),
-            title: f.hint,
-            style: {
-              width: 180, padding: '3px 6px', border: '1px solid ' + T.border, borderRadius: 4,
-              background: 'transparent', color: T.text, fontSize: 12.5,
-            },
+            type: 'text', className: 'ts-set-input', value: value ?? '',
+            disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
           })
         }
+
         return React.createElement(
-          'label', { key: f.key, title: f.hint, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' } },
-          React.createElement('span', { style: { width: 150, fontSize: 12.5, color: T.text, flex: 'none' } }, f.label),
+          'div', { key: f.key, className: 'ts-set-field' },
+          head,
           control,
+          React.createElement('p', { className: 'ts-set-hint' }, f.hint),
         )
       })
       return React.createElement(
-        'div', { key: group.caption, style: { padding: '2px 14px' } },
-        React.createElement('div', { style: { fontSize: 11, color: T.dim, margin: '8px 0 2px', letterSpacing: '.03em' } }, group.caption),
+        'div', { key: group.caption, className: 'ts-set-group' },
+        React.createElement('div', { className: 'ts-set-caption' }, group.caption),
         ...rows,
       )
     })
 
     return React.createElement(
-      'div', { style: card },
+      'div', { className: 'ts-set-card', 'data-open': open ? 'true' : 'false' },
       React.createElement(
-        'button', { type: 'button', 'aria-expanded': open ? 'true' : 'false', onClick: () => setOpen(!open), style: headerStyle },
-        React.createElement(
-          'span', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 } },
-          React.createElement('span', { style: titleStyle }, 'think-summary'),
-          React.createElement('span', { style: descStyle }, '长思考链分段总结 · 改动即时生效'),
+        'button',
+        {
+          type: 'button',
+          className: 'ts-set-header',
+          'aria-expanded': open ? 'true' : 'false',
+          onClick: () => setOpen(!open),
+        },
+        React.createElement('div', { className: 'ts-set-headText' },
+          React.createElement('span', { className: 'ts-set-name' }, 'think-summary'),
+          React.createElement('span', { className: 'ts-set-desc' }, '长思考链分段总结 · 改动即时生效'),
         ),
-        React.createElement('span', { style: chevron(open) }, '▾'),
+        React.createElement('span', { className: 'ts-set-chevron' }, '▾'),
       ),
       open
         ? React.createElement(
-            'div', { style: { borderTop: '1px solid ' + T.border } },
+            'div', { className: 'ts-set-body' },
             ...groups,
             React.createElement(
-              'div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px 12px' } },
-              makeButton('保存', 'primary', () => void save(), busy),
-              makeButton('恢复默认', 'secondary', () => void resetAll(), busy),
+              'div', { className: 'ts-set-footer' },
               msg
-                ? React.createElement('span', { style: { fontSize: 12, color: msgKind === 'err' ? T.err : T.ok } }, msg)
+                ? React.createElement('p', { className: 'ts-set-msg', 'data-kind': msgKind }, msg)
                 : (snap.writable === false
-                    ? React.createElement('span', { style: { fontSize: 11.5, color: T.dim } }, '（Host 文档只读）')
-                    : null),
+                    ? React.createElement('p', { className: 'ts-set-msg' }, '（Host 文档只读）')
+                    : React.createElement('p', { className: 'ts-set-msg' }, '')),
+              React.createElement('button', { type: 'button', className: 'ts-set-discard', disabled: busy, onClick: () => void resetAll() }, '恢复默认'),
+              React.createElement('button', { type: 'button', className: 'ts-set-save', disabled: busy, onClick: () => void save() }, '保存'),
             ),
           )
         : null,
