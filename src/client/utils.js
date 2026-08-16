@@ -14,13 +14,14 @@ function fmtTok(n) {
   return k + 'k'
 }
 
-/** 段状态：主模型小结 → 小结标签；代码段/表格段 → 结构化摘要（未精炼）；未精炼原因 → 原因标签；已精炼 → 已精炼；否则无标签。 */
+/** 段状态：主模型小结 → 小结标签；代码段/表格段 → 结构化摘要（未精炼）；未精炼原因 → 原因标签；待精炼 → 待精炼；已精炼 → 已精炼。 */
 function segStatus(s) {
   if (s && s.kind === 'self') return { cls: 'ts-seg-self', label: '思考小结' }
   if (s && s.skipReason === 'code') return { cls: 'ts-seg-skip', label: '代码段·未精炼' }
   if (s && s.skipReason === 'table') return { cls: 'ts-seg-skip', label: '表格·未精炼' }
   if (s && s.refined) return { cls: 'ts-seg-refined', label: '已精炼' }
   if (s && s.unrefinedReason) return { cls: 'ts-seg-skip', label: s.unrefinedReason }
+  if (s && !s.kind) return { cls: 'ts-seg-pending', label: '待精炼' }
   return null
 }
 

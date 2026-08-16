@@ -59,7 +59,7 @@ export function installDetect(
         // 不传 onMeta：ignore 模式下代码块/表格内容丢弃即可，总结卡片不显示任何
         // 代码块/表格痕迹（用户需求：改为不显示；keep 模式走下方 sink 产出内容段）
       },
-      (text: string, tokens: number, meta) => {
+      (text: string, tokens: number, meta, isTail?: boolean) => {
         // 门控保证 cut 只发生在 inSplice 之后；state 级去重防重试/重放
         const h = hashText(text)
         if (state.hashes.has(h)) return
@@ -70,9 +70,10 @@ export function installDetect(
           skipCode: opts.codeBlockMode === 'keep-skip',
           skipTable: opts.tableMode === 'keep-skip',
         })
-        // 小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token，记原因
+        // 非末尾小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token，记原因；
+        // 末尾尾巴段（isTail，思考结束的结论尾巴）即使 < min 也精炼
         const minRefine = opts.segmentMinTokens ?? 1500
-        const tooSmall = tokens < minRefine
+        const tooSmall = tokens < minRefine && !isTail
         store.pushSegment(state, think.id, {
           index: idx,
           summary: choice.summary,

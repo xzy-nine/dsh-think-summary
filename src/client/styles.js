@@ -27,6 +27,7 @@ const PANEL_CSS = `
 .ts-dock-prev-body{box-shadow:inset 0 1px 0 var(--dsw-alias-border-l1)}
 .ts-seg-refined{color:var(--dsw-alias-state-business-primary)}
 .ts-seg-skip{color:var(--dsw-alias-label-tertiary)}
+.ts-seg-pending{color:var(--dsw-alias-label-tertiary)}
 .ts-seg-self{color:var(--dsw-alias-state-warn-primary)}
 .ts-tail{margin:4px 16px 4px 30px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
 .ts-tail-head{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-align:left;transition:background-color 120ms ease}

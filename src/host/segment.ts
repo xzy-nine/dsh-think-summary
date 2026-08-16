@@ -35,7 +35,7 @@ export interface SegmentOptions {
 }
 
 export interface SegmentSink {
-  onSegment(text: string, tokens: number, meta: SegmentMeta): void
+  onSegment(text: string, tokens: number, meta: SegmentMeta, isTail?: boolean): void
 }
 
 export interface SegmentPiece {
@@ -75,7 +75,7 @@ export class Segmenter {
   private readonly min: number
   private readonly max: number
   private readonly canCut: (() => boolean) | undefined
-  private readonly emit: (text: string, tokens: number, meta: SegmentMeta) => void
+  private readonly emit: (text: string, tokens: number, meta: SegmentMeta, isTail?: boolean) => void
   private readonly onMeta: ((info: { kind: 'code' | 'table'; lines: number; lang?: string }) => void) | undefined
   private readonly codeMode: 'ignore' | 'keep'
   private readonly tableMode: 'ignore' | 'keep'
@@ -229,7 +229,15 @@ export class Segmenter {
     // 普通内容行：边界切在行前，行内容入段
     if (this.gate() && this.tokenCount() >= this.min && isBoundaryLine(kind.kind, line)) this.cutBuf()
     this.append(line)
-    if (this.gate() && this.tokenCount() >= this.max) this.cutBuf(this.backtrackSentenceEnd())
+    if (this.gate() && this.tokenCount() >= this.max) {
+      const pos = this.backtrackSentenceEnd()
+      // 切后剩余 < min：并入当前段（整段切出，无小残留）——避免"中间过小段"；
+      // 段大小 ≤ max + min，缓冲仍有界
+      const rest = this.buf.slice(pos)
+      const rr = countRaw(rest)
+      if (Math.round(rr.cjk + rr.other / 4) < this.min) this.cutBuf(this.buf.length)
+      else this.cutBuf(pos)
+    }
   }
 
   private append(line: string): void {
@@ -239,8 +247,9 @@ export class Segmenter {
     this.other += r.other
   }
 
-  /** 在指定位置切段（默认切到尾）；剩余文本续接为下一段。 */
-  private cutBuf(pos = this.buf.length): void {
+  /** 在指定位置切段（默认切到尾）；剩余文本续接为下一段。
+   *  isTail：flush 切出的末尾段（可能 < min，仍保留并精炼——末尾结论不丢）。 */
+  private cutBuf(pos = this.buf.length, isTail = false): void {
     const text = this.buf.slice(0, pos).trim()
     const rest = this.buf.slice(pos)
     this.buf = rest
@@ -251,7 +260,7 @@ export class Segmenter {
     const h = hashText(text)
     if (h === this.lastHash) return
     this.lastHash = h
-    this.emit(text, estimateTokens(text), analyzeMeta(text))
+    this.emit(text, estimateTokens(text), analyzeMeta(text), isTail)
   }
 
   /** max 切点：优先句末回退，其次行末，最后当前位置。 */
@@ -309,7 +318,7 @@ export class Segmenter {
       this.inTable = false
       if (this.buf) this.cutBuf()
     }
-    if (this.gate() && this.tokenCount() >= MIN_SEGMENT_FLOOR) this.cutBuf()
+    if (this.gate() && this.tokenCount() >= MIN_SEGMENT_FLOOR) this.cutBuf(this.buf.length, true) // 尾巴段：保留且标记（精炼）
   }
 
   get bufferedTokens(): number {

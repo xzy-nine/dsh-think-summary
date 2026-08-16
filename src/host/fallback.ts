@@ -131,9 +131,11 @@ export function installFallback(
           // 微尾段（低于 flush 下限）不产出
           if (o.tokens < MIN_SEGMENT_FLOOR) continue
           const idx = base + o.index
-          // 小段（低于段最小窗口）不调小模型精炼，记原因（省 token）
+          // 末尾段（静态最后一段，思考结束的尾巴）即使 < min 也精炼；
+          // 非末尾小段不精炼，记原因（省 token）
           const minRefine = opts.segmentMinTokens ?? 1500
-          const tooSmall = o.tokens < minRefine
+          const isTail = o.index === outcomes.length - 1
+          const tooSmall = o.tokens < minRefine && !isTail
           store.pushSegment(state, thinkKey, {
             index: idx,
             summary: o.summary,
@@ -147,7 +149,7 @@ export function installFallback(
             ts: o.ts,
           })
           // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过；
-          // 小段（低于段最小窗口）不精炼，省 token
+          // 非末尾小段不精炼，省 token；末尾尾巴段精炼
           if (refine && !o.skipReason && !tooSmall) {
             refine.enqueue({
               sessionId: sid,
