@@ -69,11 +69,17 @@ export interface SavedThinkState {
 }
 
 export class ThinkStateStore {
+  /** 实例唯一 id（诊断：确认产生段的 store 与 persist 监听的 store 是否同一实例）。 */
+  readonly instanceId: string
   private map = new Map<string, ThinkState>()
   /** 最近活跃会话（侧边栏面板缺省 sessionId 时使用）。 */
   private lastActiveSessionId: string | undefined
   /** 状态变更监听（持久化防抖写盘用）。 */
   private listeners = new Set<() => void>()
+
+  constructor(instanceId = Math.random().toString(36).slice(2, 8)) {
+    this.instanceId = instanceId
+  }
 
   get(sessionId: string): ThinkState | undefined {
     return this.map.get(sessionId)
@@ -86,6 +92,9 @@ export class ThinkStateStore {
   }
 
   private notify(): void {
+    // 诊断：确认 notify 被调用（段产生时 persist 应写盘）
+    // eslint-disable-next-line no-console
+    console.log(`[dsh-think-summary] notify store=${this.instanceId} pid=${typeof process !== 'undefined' ? process.pid : '?'} listeners=${this.listeners.size} hasSegs=${this.map.size > 0 && [...this.map.values()].some((s) => s.thinks.some((t) => t.segments.length > 0))}`)
     for (const l of this.listeners) l()
   }
 

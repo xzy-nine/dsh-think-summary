@@ -62,7 +62,7 @@ export function installPersist(
       writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
       renameSync(tmp, file)
       // eslint-disable-next-line no-console
-      console.log(`[dsh-think-summary] persist OK: ${payload.sessions.length} sessions -> ${file}`)
+      console.log(`[dsh-think-summary] persist OK pid=${process.pid}: ${payload.sessions.length} sessions -> ${file}`)
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('[dsh-think-summary] persist FAIL:', error instanceof Error ? error.message : String(error))
@@ -73,15 +73,17 @@ export function installPersist(
   if (getOptions().persistEnabled !== false) {
     store.loadAll(readSaved())
     // eslint-disable-next-line no-console
-    console.log(`[dsh-think-summary] persist loaded, store size=${store.size}`)
+    console.log(`[dsh-think-summary] persist loaded pid=${process.pid}, store size=${store.size}`)
   } else {
     // eslint-disable-next-line no-console
-    console.log('[dsh-think-summary] persist disabled by config')
+    console.log(`[dsh-think-summary] persist disabled by config pid=${process.pid}`)
   }
 
   // 状态变更 → **同步立即写**（不防抖）：begin/end/push/清理每次都落盘。
   // dsh 强杀/异常退出也不丢最后一条（写已完成才返回）。
   const offChange = store.onChange(writeNow)
+  // eslint-disable-next-line no-console
+  console.log(`[dsh-think-summary] persist registered store=${store.instanceId} pid=${process.pid}`)
 
   // 自动清理：定时检查"已归档"会话（非活跃 + 空闲超配置天数）
   const timer = ctx.get('timer') as { interval?: (fn: () => void, ms: number) => unknown } | undefined
@@ -94,15 +96,10 @@ export function installPersist(
     const removed = store.clearArchived(days * DAY_MS)
     if (removed > 0) writeNow() // 清理后落盘
   }
-  const offInterval = timer?.interval?.(autoClean, CLEAN_INTERVAL_MS)
-
-  // 生命周期清理：卸载时同步写盘并释放监听/定时器
-  const dispose = () => {
-    offChange?.()
-    if (typeof offInterval === 'function') offInterval()
-    writeNow()
-  }
-  if (typeof ctx.effect === 'function') ctx.effect(dispose)
+  // 注意：不能用 ctx.effect 包装 store.onChange 的清理——Cordis 的 fiber effect 在
+  // apply 返回后即执行 disposer，会把 onChange 监听器立即移除（listeners=0，永不写盘）。
+  // store.onChange 与 timer.interval 的生命周期都随插件实例，无需手动 dispose。
+  timer?.interval?.(autoClean, CLEAN_INTERVAL_MS)
 
   // 手动清理 RPC
   whenWebServer(ctx, (webServer) => {
