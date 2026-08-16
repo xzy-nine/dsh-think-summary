@@ -53,6 +53,7 @@ const FIELD_GROUPS = [
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
       { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
       { key: 'refineTimeout', label: '精炼超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死任务超时放弃并释放并发位' },
+      { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
       { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
     ],
   },
@@ -297,7 +298,9 @@ function makeSettingsCard(scope) {
 
         // 控件：bool 无独立控件行（开关在 label 行）；其余 34px 控件在 label 下
         let control = null
-        if (f.kind === 'num') {
+        if (f.kind === 'bool') {
+          control = null // 开关已渲染在 label 行，绝不能落入下方 else 的文本框
+        } else if (f.kind === 'num') {
           control = React.createElement('input', {
             type: 'text', inputMode: 'numeric', className: 'ts-set-input', value: value ?? '',
             disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
