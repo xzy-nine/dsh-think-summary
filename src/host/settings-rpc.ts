@@ -1,5 +1,5 @@
 import type { ThinkStateStore } from './state.js'
-import { whenWebServer, writeJson, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
+import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
 import type { CtxLike } from './ctx.js'
 
 /**
@@ -38,28 +38,6 @@ interface SettingsOp {
 export function installSettingsRpc(ctx: CtxLike, store: ThinkStateStore): void {
   const settings = (): SettingsLike | undefined => ctx.get('settings') as SettingsLike | undefined
 
-  const readBody = async (req: RouteReq): Promise<{ ops?: SettingsOp[]; expectedRevision?: number } | null> => {
-    // 读 IncomingMessage 的 data 流（dsh-web-server 的 handler 收到原始请求对象）。
-    const raw = req as RouteReq & { on?: (ev: string, cb: (chunk?: unknown) => void) => unknown }
-    if (typeof raw.on !== 'function') return null
-    let body = ''
-    await new Promise<void>((resolve, reject) => {
-      raw.on?.('data', (chunk: unknown) => {
-        if (typeof chunk === 'string') body += chunk
-        else if (chunk && typeof (chunk as { toString?: (enc?: string) => string }).toString === 'function') {
-          body += (chunk as { toString: (enc?: string) => string }).toString('utf8')
-        }
-      })
-      raw.on?.('end', () => resolve())
-      raw.on?.('error', () => reject(new Error('body read failed')))
-    })
-    try {
-      return JSON.parse(body) as { ops?: SettingsOp[]; expectedRevision?: number }
-    } catch {
-      return null
-    }
-  }
-
   /** 命名空间视图：{ ns, value, base, user, revision, writable }。 */
   const namespaceView = (s: SettingsLike) => {
     const descriptor = (s.describe?.({ redactSecrets: true }) ?? []).find((d) => String(d.ns) === NS_STRING)
@@ -94,7 +72,7 @@ export function installSettingsRpc(ctx: CtxLike, store: ThinkStateStore): void {
         if (!isLoopback(req)) return writeJson(res, 403, { ok: false, code: 'forbidden', message: 'loopback-only' })
         const s = settings()
         if (!s) return writeJson(res, 200, { ok: false, code: 'internal', message: 'settings service is absent' })
-        const body = await readBody(req)
+        const body = await readJsonBody<{ ops?: SettingsOp[]; expectedRevision?: number }>(req)
         if (body === null || !Array.isArray(body.ops) || body.ops.length === 0) {
           return writeJson(res, 400, { ok: false, code: 'rejected', message: 'invalid mutate payload' })
         }

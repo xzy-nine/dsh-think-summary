@@ -1,7 +1,7 @@
 import type { ThinkStateStore } from './state.js'
 import { estimateTokens } from './detect.js'
 import { MIN_SEGMENT_FLOOR } from './segment.js'
-import { processThinking } from './pipeline.js'
+import { processThinking, decideRefine } from './summarize/pipeline.js'
 import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
 import type { CtxLike } from './ctx.js'
@@ -131,11 +131,8 @@ export function installFallback(
           // 微尾段（低于 flush 下限）不产出
           if (o.tokens < MIN_SEGMENT_FLOOR) continue
           const idx = base + o.index
-          // 末尾段（静态最后一段，思考结束的尾巴）即使 < min 也精炼；
-          // 非末尾小段不精炼，记原因（省 token）
-          const minRefine = opts.segmentMinTokens ?? 1500
-          const isTail = o.index === outcomes.length - 1
-          const tooSmall = o.tokens < minRefine && !isTail
+          // 精炼决策（实时/兜底共用口径）：末尾段即使 < min 也精炼；非末尾小段不精炼记原因
+          const dec = decideRefine(opts, o.tokens, o.index === outcomes.length - 1)
           store.pushSegment(state, thinkKey, {
             index: idx,
             summary: o.summary,
@@ -143,14 +140,11 @@ export function installFallback(
             refined: false,
             skipReason: o.skipReason,
             unrefinedReason:
-              refine && !o.skipReason && tooSmall
-                ? `段过小（${o.tokens} tok < ${minRefine}）未精炼`
-                : undefined,
+              refine && !o.skipReason && dec.tooSmall ? dec.unrefinedReason : undefined,
             ts: o.ts,
           })
-          // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过；
-          // 非末尾小段不精炼，省 token；末尾尾巴段精炼
-          if (refine && !o.skipReason && !tooSmall) {
+          // 兜底路径分段同样精炼（若默认模型可解析）；代码段/表格段按配置跳过
+          if (refine && !o.skipReason && !dec.tooSmall) {
             refine.enqueue({
               sessionId: sid,
               thinkId: thinkKey,

@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import type { ThinkStateStore } from './state.js'
 import type { ThinkSummaryConfig } from './config.js'
 import type { CtxLike } from './ctx.js'
-import { whenWebServer, writeJson, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
+import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
 
 const FILE_NAME = 'dsh-think-summary.json'
 /** 写盘防抖（毫秒）。 */
@@ -109,26 +109,8 @@ export function installPersist(
         if (!isLoopback(req)) return writeJson(res, 403, { ok: false, code: 'forbidden', message: 'loopback-only' })
         try {
           let graceMs = 0
-          const raw = req as RouteReq & { on?: (ev: string, cb: (chunk?: unknown) => void) => unknown }
-          if (typeof raw.on === 'function') {
-            let body = ''
-            await new Promise<void>((resolve) => {
-              raw.on?.('data', (chunk: unknown) => {
-                if (typeof chunk === 'string') body += chunk
-                else if (chunk && typeof (chunk as { toString?: (enc?: string) => string }).toString === 'function') {
-                  body += (chunk as { toString: (enc?: string) => string }).toString('utf8')
-                }
-              })
-              raw.on?.('end', () => resolve())
-              raw.on?.('error', () => resolve())
-            })
-            try {
-              const parsed = JSON.parse(body) as { graceMs?: number }
-              if (typeof parsed?.graceMs === 'number' && parsed.graceMs > 0) graceMs = parsed.graceMs
-            } catch {
-              /* 无 body 或非法 JSON：按全清理 */
-            }
-          }
+          const body = await readJsonBody<{ graceMs?: number }>(req)
+          if (body && typeof body.graceMs === 'number' && body.graceMs > 0) graceMs = body.graceMs
           const removed = store.clearArchived(graceMs)
           if (removed > 0) scheduleSave()
           writeJson(res, 200, { ok: true, removed, persisted: getOptions().persistEnabled !== false })

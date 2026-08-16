@@ -51,40 +51,13 @@ function writeOpenMap(m) {
 function makeThinkSummaryView() {
   return function ThinkSummaryView(props) {
     const sessionId = props && props.sessionId
-    const [state, setState] = React.useState(null)
-    const [enabled, setEnabled] = React.useState(true)
+    const { state, enabled } = useThinkState(sessionId)
     const [openMap, setOpenMap] = React.useState(readOpenMap)
     const listRef = React.useRef(null)
     // 是否停在底部（用户滚动时由 scroll 事件实时更新；仅在底部时自动跟随）
     const atBottomRef = React.useRef(true)
     // 首次渲染（列表出现）强制滚到底部，此后由 scroll 事件接管
     const firstRunRef = React.useRef(true)
-
-    React.useEffect(() => {
-      if (!sessionId) return undefined
-      let alive = true
-      let timer = null
-      const poll = async () => {
-        try {
-          const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
-          if (!res.ok) return
-          const json = await res.json()
-          if (!alive) return
-          setEnabled(!json || json.enabled !== false)
-          setState((json && json.state) || null)
-        } catch {
-          /* 轮询失败不影响 */
-        } finally {
-          if (!alive) return
-          timer = setTimeout(poll, 1500)
-        }
-      }
-      void poll()
-      return () => {
-        alive = false
-        if (timer !== null) clearTimeout(timer)
-      }
-    }, [sessionId])
 
     // 滚动：scroll 事件更新 atBottom；数据更新时仅在底部才滚底；
     // 首次挂载强制滚底（否则初始 update() 会把 atBottom 算成 false，

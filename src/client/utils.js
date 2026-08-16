@@ -50,6 +50,44 @@ function segHeadLabel(s, prefix) {
 }
 
 /**
+ * 轮询会话思考状态（dock/tail/view 共用）。
+ * 每 1.5s fetch STATE_ROUTE；返回 { state, enabled }。
+ * stopWhen：可选——返回 true 时停止轮询（tail 找到目标即停）。
+ */
+function useThinkState(sessionId, stopWhen) {
+  const [state, setState] = React.useState(null)
+  const [enabled, setEnabled] = React.useState(true)
+  React.useEffect(() => {
+    if (!sessionId) return undefined
+    let alive = true
+    let timer = null
+    const poll = async () => {
+      try {
+        const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
+        if (!res.ok) return
+        const json = await res.json()
+        if (!alive) return
+        setEnabled(!json || json.enabled !== false)
+        setState((json && json.state) || null)
+      } catch {
+        /* 轮询失败不影响 */
+      } finally {
+        if (!alive) return
+        if (typeof stopWhen === 'function' && stopWhen(state)) return // 目标已达成：停止
+        timer = setTimeout(poll, 1500)
+      }
+    }
+    void poll()
+    return () => {
+      alive = false
+      if (timer !== null) clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+  return { state, enabled }
+}
+
+/**
  * 原生 dsh chevron-down-outline-14 图标（对齐默认箭头，非实心字符）。
  * 路径取自 dsh-client-ui-primitives IconChevronDownOutline14；颜色跟 currentColor，
  * 由使用处 CSS class 控制；旋转交给父级 class 的 transform。

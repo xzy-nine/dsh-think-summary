@@ -21,38 +21,21 @@ function isChatTabActive() {
 function makeInputDock() {
   return function ThinkInputDock(props) {
     const sessionId = props && props.sessionId
-    const [state, setState] = React.useState(null)
-    const [enabled, setEnabled] = React.useState(true)
+    const { state, enabled } = useThinkState(sessionId)
     const [open, setOpen] = React.useState(true)
     const [prevOpen, setPrevOpen] = React.useState(false)
     const [chatView, setChatView] = React.useState(true)
 
+    // 视图过滤：只在"对话"视图显示（轨迹/思考总结等视图隐藏）。
+    // 会话 store 的 view 状态在 slot 组件侧不可订阅，故定时检测 tablist 的
+    // aria-selected（chat 视图 tab label = '对话'/'chat'）。
     React.useEffect(() => {
-      if (!sessionId) return undefined
       let alive = true
-      let timer = null
-      const poll = async () => {
-        try {
-          const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
-          if (!res.ok) return
-          const json = await res.json()
-          if (!alive) return
-          setEnabled(!json || json.enabled !== false)
-          setState((json && json.state) || null)
-        } catch {
-          /* 轮询失败不影响聊天 */
-        } finally {
-          if (!alive) return
-          setChatView(isChatTabActive())
-          timer = setTimeout(poll, 1500)
-        }
-      }
-      void poll()
-      return () => {
-        alive = false
-        if (timer !== null) clearTimeout(timer)
-      }
-    }, [sessionId])
+      const check = () => { if (alive) setChatView(isChatTabActive()) }
+      check()
+      const timer = setInterval(check, 1500)
+      return () => { alive = false; clearInterval(timer) }
+    }, [])
 
     if (!enabled) return null // 插件总开关关闭：不显示实时思考面板
     if (!chatView) return null // 非"对话"视图：隐藏实时思考面板

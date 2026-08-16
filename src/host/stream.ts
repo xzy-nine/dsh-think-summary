@@ -2,6 +2,7 @@ import { ThinkingDetector } from './detect.js'
 import type { ThinkStateStore } from './state.js'
 import { Segmenter, hashText } from './segment.js'
 import { summarizeSegment } from './summarize/heuristic.js'
+import { decideRefine } from './summarize/pipeline.js'
 import { makeSelfSummaryCapture } from './self-summary.js'
 import type { RefineQueue } from './summarize/refine.js'
 import type { ThinkSummaryConfig } from './config.js'
@@ -70,10 +71,8 @@ export function installDetect(
           skipCode: opts.codeBlockMode === 'keep-skip',
           skipTable: opts.tableMode === 'keep-skip',
         })
-        // 非末尾小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token，记原因；
-        // 末尾尾巴段（isTail，思考结束的结论尾巴）即使 < min 也精炼
-        const minRefine = opts.segmentMinTokens ?? 1500
-        const tooSmall = tokens < minRefine && !isTail
+        // 精炼决策（实时/兜底共用口径）：非末尾小段不精炼记原因；末尾尾巴段即使 < min 也精炼
+        const dec = decideRefine(opts, tokens, isTail)
         store.pushSegment(state, think.id, {
           index: idx,
           summary: choice.summary,
@@ -83,12 +82,10 @@ export function installDetect(
           refined: false,
           skipReason: choice.skipReason,
           unrefinedReason:
-            refine && !choice.skipReason && tooSmall
-              ? `段过小（${tokens} tok < ${minRefine}）未精炼`
-              : undefined,
+            refine && !choice.skipReason && dec.tooSmall ? dec.unrefinedReason : undefined,
           ts: Date.now(),
         })
-        if (refine && !choice.skipReason && !tooSmall) {
+        if (refine && !choice.skipReason && !dec.tooSmall) {
           refine.enqueue({
             sessionId: key,
             thinkId: think.id,

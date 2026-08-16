@@ -43,6 +43,28 @@ export function writeJson(res: RouteRes, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
+/** 读取请求体 JSON（dsh-web-server handler 收到原始 IncomingMessage）。 */
+export async function readJsonBody<T = Record<string, unknown>>(req: RouteReq): Promise<T | null> {
+  const raw = req as RouteReq & { on?: (ev: string, cb: (chunk?: unknown) => void) => unknown }
+  if (typeof raw.on !== 'function') return null
+  let body = ''
+  await new Promise<void>((resolve, reject) => {
+    raw.on?.('data', (chunk: unknown) => {
+      if (typeof chunk === 'string') body += chunk
+      else if (chunk && typeof (chunk as { toString?: (enc?: string) => string }).toString === 'function') {
+        body += (chunk as { toString: (enc?: string) => string }).toString('utf8')
+      }
+    })
+    raw.on?.('end', () => resolve())
+    raw.on?.('error', () => reject(new Error('body read failed')))
+  })
+  try {
+    return JSON.parse(body) as T
+  } catch {
+    return null
+  }
+}
+
 /** loopback 守卫：拒绝非本机来源（浏览器同源 + 远程浏览器无持久化设置）。 */
 export function isLoopback(req: RouteReq): boolean {
   const addr = req.socket?.remoteAddress

@@ -15,7 +15,7 @@
  * 边界信号切在行前（边界行进下一段）；canCut 门控保留阈值前缓冲；
  * flush 兜底（< MIN_SEGMENT_FLOOR 丢弃）；段哈希去重（层内 + state 级）。
  */
-import { countRaw, estimateTokens, type RawCount } from './detect.js'
+import { countRaw, estimateTokens, rawToTokens, type RawCount } from './detect.js'
 import { FENCE_RE, classifyLine, isBoundaryLine, analyzeMeta, type SegmentMeta } from './mdline.js'
 
 export interface SegmentOptions {
@@ -113,7 +113,7 @@ export class Segmenter {
   }
 
   private tokenCount(): number {
-    return Math.round(this.cjk + this.other / 4)
+    return rawToTokens({ cjk: this.cjk, other: this.other })
   }
 
   private gate(): boolean {
@@ -147,7 +147,7 @@ export class Segmenter {
       // 围栏/表格行（行首 ``` 或 |）等待行完成
       const trimmed = this.pending.trimStart()
       if (
-        Math.round(this.pendingCjk + this.pendingOther / 4) > pendingSplitTokens(this.max) &&
+        rawToTokens({ cjk: this.pendingCjk, other: this.pendingOther }) > pendingSplitTokens(this.max) &&
         !FENCE_RE.test(trimmed) &&
         !trimmed.startsWith('|')
       ) {
@@ -252,7 +252,7 @@ export class Segmenter {
       // 段大小 ≤ max + min，缓冲仍有界
       const rest = this.buf.slice(pos)
       const rr = countRaw(rest)
-      if (Math.round(rr.cjk + rr.other / 4) < this.min) this.cutBuf(this.buf.length)
+      if (rawToTokens(rr) < this.min) this.cutBuf(this.buf.length)
       else this.cutBuf(pos)
     }
   }
@@ -264,10 +264,9 @@ export class Segmenter {
     this.other += r.other
   }
 
-  /** 单行原始 token 估算（CJK≈1/字符，其余≈4/字符，与 estimateTokens 同口径）。 */
+  /** 单行原始 token 估算（与 estimateTokens 同口径）。 */
   private lineTokens(line: string): number {
-    const r = countRaw(line)
-    return Math.round(r.cjk + r.other / 4)
+    return rawToTokens(countRaw(line))
   }
 
   /** 在指定位置切段（默认切到尾）；剩余文本续接为下一段。
