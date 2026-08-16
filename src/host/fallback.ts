@@ -87,10 +87,12 @@ export function installFallback(
         think.turn = turn
         think.step = step
         // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配）。
-        // 从后往前找"最后一个 s 开头、非活跃、未打标"的 think（该步 llm/stream 刚结束）。
+        // 从后往前找"最后一个 s 开头、未打标"的 think（该步 llm/stream 刚结束；
+        // 不检查 active——assistant/message 事件可能先于流收尾的 endThink 到达，
+        // 依赖 active 会漏打标或把标打到错误的 step 上）
         for (let i = state.thinks.length - 1; i >= 0; i--) {
           const t = state.thinks[i]
-          if (t && t.id.startsWith('s') && !t.active && t.turn === undefined) {
+          if (t && t.id.startsWith('s') && t.turn === undefined) {
             t.turn = turn
             t.step = step
             break
@@ -101,8 +103,11 @@ export function installFallback(
         // 不产出段——实时路径由 inSplice 门控不出段，兜底也必须一致，
         // 否则连续短思考会产生一连串几十 token 的小段
         if (estimateTokens(entry.text) < threshold) return
-        // 该 step 实时路径已产出分段则跳过
-        if (state.inSplice && think.segments.length > 0) return
+        // 同 (turn, step) 的实时 think 已产出分段则跳过兜底（防同一思考两套总结）
+        const realtimeHasSegs = state.thinks.some(
+          (t) => t.id.startsWith('s') && t.turn === turn && t.step === step && t.segments && t.segments.length > 0,
+        )
+        if (realtimeHasSegs || (state.inSplice && think.segments.length > 0)) return
         const outcomes = processThinking(
           entry.text,
           {

@@ -20,11 +20,16 @@ function makeThinkTail() {
       let alive = true
       let timer = null
       let tries = 0
-      // 节点所在 step 号：steps[] 中 end.seq === 本节点 seq 的那一步
+      // 节点所在 step 号：优先 steps 中 end.seq === 本节点 seq 的 step；
+      // seq 基准不一致时退回"节点 seq 落在 step 起止事件范围内"，再退首个 step
       let stepNo = undefined
-      if (turn.steps && Array.isArray(turn.steps)) {
-        const hit = turn.steps.find((s) => s && s.end && s.end.seq === seq) || turn.steps.find((s) => s && s.step !== undefined)
-        stepNo = hit && hit.step
+      if (turn.steps && Array.isArray(turn.steps) && turn.steps.length > 0) {
+        const byEnd = turn.steps.find((s) => s && s.end && s.end.seq === seq)
+        const byRange =
+          byEnd ||
+          turn.steps.find((s) => s && s.start && s.start.seq <= seq && s.end && s.end.seq >= seq)
+        const picked = byRange || turn.steps.find((s) => s && s.step !== undefined)
+        stepNo = picked && picked.step
       }
       const load = async () => {
         try {
@@ -34,9 +39,14 @@ function makeThinkTail() {
           if (!alive) return
           const state = json && json.state
           if (!state) return
-          const matched = (state.thinks || []).find(
-            (t) => t.turn === turn.turn && (stepNo === undefined || t.step === stepNo) && t.segments && t.segments.length > 0,
-          )
+          const thinks = state.thinks || []
+          // 优先精确匹配 (turn, step)；stepNo 无法确定或精确匹配不到时，
+          // 回退到该 turn 任意有段的 think（保证显示）
+          const matched =
+            thinks.find(
+              (t) => t.turn === turn.turn && (stepNo === undefined || t.step === stepNo) && t.segments && t.segments.length > 0,
+            ) ||
+            thinks.find((t) => t.turn === turn.turn && t.segments && t.segments.length > 0)
           if (matched) {
             setThink(matched)
             return // 找到即停（含精炼完成的标记）
