@@ -47,6 +47,7 @@ const FIELD_GROUPS = [
         hint: '精炼输入预算内的裁剪策略；完整保留不裁剪但最耗 token',
       },
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
+      { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
       { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
       { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
     ],

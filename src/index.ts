@@ -27,6 +27,7 @@ const Config = z.object({
   refineOutputTokens: z.number().default(1024),
   refineModel: z.string().default('auto'),
   refinePrompt: z.string().default(DEFAULT_REFINE_PROMPT),
+  refineConcurrency: z.number().default(3),
   codeBlockMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   tableMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),

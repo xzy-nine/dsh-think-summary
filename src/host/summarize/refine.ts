@@ -23,6 +23,8 @@ export interface RefineOptions {
   model?: string
   /** 精炼 system 提示词（设置页可修改；缺省用默认模板）。 */
   refinePrompt?: string
+  /** 并行精炼数（并发执行，任务之间互不打断）。 */
+  refineConcurrency?: number
   /**
    * 输入裁剪策略：'headtail' 头尾裁剪（保头+尾、丢中段）；
    * 'tail' 仅保尾部；'full' 完整保留（不裁剪）。头尾裁剪同预算信息量更高，
@@ -53,15 +55,6 @@ export interface RefineApply {
     /** 本次精炼实际消耗（估算）：输入 = 裁剪后喂入的 token，输出 = 摘要 token。 */
     refineTokens: { input: number; output: number },
   ): void
-}
-
-/** 在途任务控制器：携带归属，供按 (session, think) 精确取消。 */
-interface Controller {
-  sessionId: string
-  thinkId: string
-  aborted?: boolean
-  abort: () => void
-  signal?: AbortSignal
 }
 
 /** 展示截断：精炼结果最多保留 ~60 token（约 240 字符）。 */
@@ -137,10 +130,17 @@ export async function resolveModel(
   return fallback
 }
 
+/**
+ * 精炼队列（并发池，互不打断）：
+ *  - 固定并发上限（refineConcurrency，默认 3）：任务入队即有空位并行执行，
+ *    不串行排队、不互相阻塞（一个卡住不再拖住整队）
+ *  - **不打断**：任务一旦入队就执行到底（不再按 think 取消/中止）——
+ *    新思考/后续任务不会影响已完成思考的在途精炼（修复"部分段不精炼"）
+ *  - 错误隔离：单任务失败只记日志，启发式摘要保留，不影响其他任务
+ */
 export class RefineQueue {
   private queue: RefineTask[] = []
-  private running = false
-  private readonly controllers = new Set<Controller>()
+  private running = 0
   private readonly getOptions: () => RefineOptions
   private readonly getLlm: () => LlmLike | undefined
   private readonly apply: RefineApply
@@ -155,43 +155,31 @@ export class RefineQueue {
     this.apply = apply
   }
 
-  /** 门控入队（读实时配置）：开启即全量精炼，不做段大小门控。 */
+  /** 门控入队（读实时配置）：精炼开关开（段大小/代码跳过由调用方决定）。 */
   enqueue(task: RefineTask): boolean {
     const o = this.getOptions()
     if (o.enabled === false) return false
     this.queue.push(task)
-    void this.pump()
+    this.pump()
     return true
   }
 
-  /**
-   * 按 (会话, think) 精确取消：只清该次思考的排队任务，只中止该次思考的在途调用。
-   * 修复：旧版 cancelSession 会把**所有在途任务**中止并清掉整个会话的排队任务——
-   * 新思考的流中止（如用户停止）会打断旧思考仍未完成的精炼，导致部分段不精炼。
-   */
-  cancelThink(sessionId: string, thinkId: string): void {
-    this.queue = this.queue.filter((t) => !(t.sessionId === sessionId && t.thinkId === thinkId))
-    for (const c of this.controllers) {
-      if (c.sessionId === sessionId && c.thinkId === thinkId) c.abort()
+  /** 并发水位：有空位就取出任务并行执行；任务结束让出空位并补位。 */
+  private pump(): void {
+    const cap = Math.max(1, this.getOptions().refineConcurrency ?? 3)
+    while (this.running < cap && this.queue.length > 0) {
+      const task = this.queue.shift()
+      if (!task) break
+      this.running++
+      void this.runOne(task).finally(() => {
+        this.running = Math.max(0, this.running - 1)
+        this.pump()
+      })
     }
   }
 
   get pending(): number {
     return this.queue.length
-  }
-
-  private async pump(): Promise<void> {
-    if (this.running) return
-    this.running = true
-    try {
-      while (this.queue.length > 0) {
-        const task = this.queue.shift()
-        if (!task) break
-        await this.runOne(task)
-      }
-    } finally {
-      this.running = false
-    }
   }
 
   private async runOne(task: RefineTask): Promise<void> {
@@ -202,19 +190,12 @@ export class RefineQueue {
       console.error('[dsh-think-summary] refine skipped: llm service unavailable', task.sessionId, task.thinkId, task.segmentIndex)
       return // 启发式保留
     }
-    const controller: Controller = { sessionId: task.sessionId, thinkId: task.thinkId, abort: () => undefined }
-    if (typeof AbortController !== 'undefined') {
-      const ac = new AbortController()
-      controller.abort = () => ac.abort()
-      controller.signal = ac.signal
-    }
-    this.controllers.add(controller)
     try {
       const model =
         o.model && o.model !== 'auto'
           ? o.model
           : await resolveModel(llm, task.provider, task.fallbackModel)
-      const res = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, controller.signal)
+      const res = await this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024)
       if (res && res.text.length > 0) {
         this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
           input: res.inputTokens,
@@ -222,7 +203,7 @@ export class RefineQueue {
         })
       }
     } catch (error) {
-      // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求；
+      // 错误隔离：任何异常只丢这次精炼，启发式摘要保留，不影响主请求与其他任务；
       // 记录失败便于排查"未精炼"的段
       // eslint-disable-next-line no-console
       console.error(
@@ -233,8 +214,6 @@ export class RefineQueue {
         task.segmentIndex,
         error instanceof Error ? error.message : String(error),
       )
-    } finally {
-      this.controllers.delete(controller)
     }
   }
 
@@ -244,7 +223,6 @@ export class RefineQueue {
     model: string,
     maxInputTokens: number,
     outputTokens: number,
-    signal?: AbortSignal,
   ): Promise<{ text: string; inputTokens: number }> {
     // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；
     // system 走顶层字段；该 provider 不支持 reasoningEffort（勿设置）。
@@ -266,7 +244,6 @@ export class RefineQueue {
           content: [{ type: 'text', text: inputText }],
         },
       ],
-      signal,
     })
     let out = ''
     for await (const chunk of stream) {

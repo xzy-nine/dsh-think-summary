@@ -24,6 +24,8 @@ export interface ThinkSummaryConfig {
   refineModel?: string
   /** 精炼 system 提示词（设置页可显示/修改）。 */
   refinePrompt?: string
+  /** 并行精炼数（并发执行，任务之间互不打断）。 */
+  refineConcurrency?: number
   /**
    * 代码块处理：'ignore' 内容不写进缓冲（省内存/token，仅记行数元信息段）；
    * 'keep-skip' 保留内容（原子不分段）+ 结构化摘要、跳过精炼；
@@ -71,6 +73,7 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   refineOutputTokens: 1024,
   refineModel: 'auto',
   refinePrompt: DEFAULT_REFINE_PROMPT,
+  refineConcurrency: 3,
   codeBlockMode: 'ignore',
   tableMode: 'ignore',
   refineTrim: 'headtail',
