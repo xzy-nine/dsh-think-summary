@@ -6,4 +6,6 @@
 export interface CtxLike {
   get<T = unknown>(name: string): T | undefined
   on(name: string, listener: (...args: any[]) => unknown): unknown
+  /** cordis effect：注册卸载清理器（插件停止/重载时执行）。 */
+  effect?(disposer: () => void): void
 }

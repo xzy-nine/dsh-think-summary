@@ -53,6 +53,15 @@ export interface ThinkSummaryConfig {
    *    直接作为段摘要展示（仅展示补充，不影响外部分段）
    */
   selfSummary?: 'off' | 'prompt'
+  /**
+   * 思考总结持久化开关（默认开）：保存到 ~/.dsh/dsh-think-summary.json，
+   * 重启 dsh 后仍可查看历史会话的思考总结。
+   */
+  persistEnabled?: boolean
+  /** 自动清理已归档（非活跃）会话的思考总结（默认关）。 */
+  autoCleanArchived?: boolean
+  /** 自动清理保留天数（归档后空闲超过该天数才清，默认 30 天）。 */
+  autoCleanArchivedDays?: number
 }
 
 export type BlockMode = 'ignore' | 'keep-skip' | 'keep-refine'
@@ -84,6 +93,9 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   tableMode: 'ignore',
   refineTrim: 'headtail',
   selfSummary: 'off',
+  persistEnabled: true,
+  autoCleanArchived: false,
+  autoCleanArchivedDays: 30,
 }
 
 export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { refineModel: string } {

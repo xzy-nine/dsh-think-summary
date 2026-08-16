@@ -70,6 +70,14 @@ const FIELD_GROUPS = [
       },
     ],
   },
+  {
+    caption: '存储与清理',
+    fields: [
+      { key: 'persistEnabled', label: '持久化保存', kind: 'bool', hint: '保存思考总结到磁盘（~/.dsh/dsh-think-summary.json），重启 dsh 后仍可查看历史总结' },
+      { key: 'autoCleanArchived', label: '自动清理', kind: 'bool', hint: '定期清理已归档（非活跃）会话的思考总结，避免磁盘无限增长' },
+      { key: 'autoCleanArchivedDays', label: '归档保留天数', kind: 'num', unit: '天', hint: '会话归档（非活跃）超过该天数后自动清理其思考总结' },
+    ],
+  },
 ]
 
 /** 开关（视觉 switch，实际是带 aria 的 button）——原来的大圆角开关样式。 */
@@ -171,6 +179,7 @@ function makeSettingsCard(scope) {
     const [msgKind, setMsgKind] = React.useState('')
     const [seed, setSeed] = React.useState(0)
     const [open, setOpen] = React.useState(false)
+    const [cleanBusy, setCleanBusy] = React.useState(false)
 
     React.useEffect(() => {
       const sync = () => setSnap(scope.getSnapshot())
@@ -268,6 +277,33 @@ function makeSettingsCard(scope) {
       }
     }
 
+    // 立即清理已归档（非活跃）会话的思考总结
+    const clearArchived = async () => {
+      setCleanBusy(true)
+      setMsg('')
+      setMsgKind('')
+      try {
+        const res = await fetch(CLEAR_ARCHIVED_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+        const json = await res.json()
+        if (json && json.ok) {
+          setMsgKind('ok')
+          setMsg('已清理 ' + (json.removed ?? 0) + ' 个已归档会话的总结' + (json.persisted ? '' : '（未持久化）'))
+        } else {
+          setMsgKind('err')
+          setMsg('清理失败: ' + String((json && json.message) || '未知错误'))
+        }
+      } catch (e) {
+        setMsgKind('err')
+        setMsg('清理失败: ' + String((e && e.message) || e))
+      } finally {
+        setCleanBusy(false)
+      }
+    }
+
     // 插件总开关行（渲染在分组之上）：关闭后不检测/不精炼/不显示总结 UI
     const disabled = busy || snap.writable === false
     const masterField = React.createElement(
@@ -337,6 +373,27 @@ function makeSettingsCard(scope) {
         'div', { key: group.caption, className: 'ts-set-group' },
         React.createElement('div', { className: 'ts-set-caption' }, group.caption),
         ...rows,
+        // "存储与清理"组末尾：立即清理已归档总结
+        group.caption === '存储与清理'
+          ? React.createElement(
+              'div', { key: '__clean__', className: 'ts-set-field' },
+              React.createElement(
+                'div', { className: 'ts-set-head' },
+                React.createElement('label', { className: 'ts-set-label' }, '立即清理'),
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'ts-set-discard',
+                    disabled: cleanBusy || snap.writable === false,
+                    onClick: () => void clearArchived(),
+                  },
+                  cleanBusy ? '清理中…' : '清理已归档总结',
+                ),
+              ),
+              React.createElement('p', { className: 'ts-set-hint' }, '删除所有非活跃会话的思考总结（含磁盘持久化数据），运行中的会话不受影响'),
+            )
+          : null,
       )
     })
 

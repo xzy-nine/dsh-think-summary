@@ -6,6 +6,7 @@ import { installRpc } from './host/rpc.js'
 import { installSettingsRpc } from './host/settings-rpc.js'
 import { installFallback } from './host/fallback.js'
 import { installSelfSummaryPrompt } from './host/self-summary.js'
+import { installPersist } from './host/persist.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
 import { resolveConfig, DEFAULT_REFINE_PROMPT, type ThinkSummaryConfig } from './host/config.js'
 import type { CtxLike } from './host/ctx.js'
@@ -34,6 +35,9 @@ const Config = z.object({
   tableMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
   refineTrim: z.union([z.const('headtail'), z.const('tail'), z.const('full')]).default('headtail'),
   selfSummary: z.union([z.const('off'), z.const('prompt')]).default('off'),
+  persistEnabled: z.boolean().default(true),
+  autoCleanArchived: z.boolean().default(false),
+  autoCleanArchivedDays: z.number().default(30),
 })
 
 /**
@@ -95,6 +99,9 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   installRpc(ctx, store, () => getConfig())
   installSettingsRpc(ctx, store)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
+
+  // 持久化：思考总结保存到磁盘（重启后仍显示）+ 已归档会话清理（手动/自动）
+  installPersist(ctx, store, () => getConfig())
 
   // 主模型自产小结：按 selfSummary 配置注入/卸载提示词段（设置变更即时同步）
   const syncSelfPrompt = installSelfSummaryPrompt(ctx, () => getConfig())

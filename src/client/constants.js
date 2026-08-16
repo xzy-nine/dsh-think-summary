@@ -5,6 +5,7 @@
 const NS = 'think-summary'
 const STATE_ROUTE = '/api/think-summary/state'
 const SETTINGS_PREFIX = '/api/think-summary/settings'
+const CLEAR_ARCHIVED_ROUTE = '/api/think-summary/clear-archived'
 
 /** 主题变量（对齐原生 dsh 设计令牌，带降级）。 */
 const T = {
