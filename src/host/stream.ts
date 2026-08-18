@@ -126,10 +126,16 @@ export function installDetect(
             // 全局暂停：忽略暂停期间的流内容（reasoning-delta 不进总结管线），
             // 模型输出照常透传。
             const paused = store.paused
-            // 暂停边沿（false → true）：丢弃当前未分段的累积内容，恢复后从新流开始
+            // 暂停边沿（false → true）：丢弃当前未分段的累积内容，恢复后从新流开始。
+            // 分段器缓冲 + 检测器计数 + token 显示 + 阈值态一并重置，保持三者一致
             if (paused && !wasPaused) {
               segmenter.resetForPause()
+              detector.reset()
               self?.flush() // 未闭合自产小结丢弃
+              think.tokens = 0
+              state.thinkingTokens = 0
+              state.inSplice = false
+              state.updatedAt = Date.now()
             }
             wasPaused = paused
             if (t === 'block-start') {

@@ -124,4 +124,11 @@ export class ThinkingDetector {
   get inSplice(): boolean {
     return this.spliced
   }
+
+  /** 暂停边沿调用：清空累计计数与阈值态，恢复后从新流重新累计。 */
+  reset(): void {
+    this.cjk = 0
+    this.other = 0
+    this.spliced = false
+  }
 }
