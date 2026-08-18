@@ -220,18 +220,24 @@ dsh-think-summary/
 │   │   ├── pipeline.ts   # 共享总结管线（兜底用）
 │   │   ├── summarize/
 │   │   │   ├── heuristic.ts   # 0 token 提取器
-│   │   │   └── refine.ts      # 小模型精炼：队列/并发 1/取消/错误隔离
+│   │   │   └── refine.ts      # 小模型精炼：并发池/超时/错误隔离
 │   │   ├── state.ts      # 会话级内存态 + TTL 清理
 │   │   ├── rpc.ts        # 双传输：webServer 路由 + harness.handle
-│   │   └── fallback.ts   # session/event 事后兜底
+│   │   ├── fallback.ts   # session/event 事后兜底
+│   │   ├── persist.ts    # 持久化（原子写 + 归档清理 RPC）
+│   │   ├── settings-rpc.ts # 自建 loopback 设置桥
+│   │   ├── self-summary.ts # 主模型自产小结（捕获器 + 提示词注入）
+│   │   └── webserver.ts  # 响应式路由注册工具
 │   └── client/
 │       ├── index.js      # 入口（apply/slots 组装）
 │       ├── settings.js   # 设置卡片（自建 loopback 桥）
 │       ├── dock.js       # 输入框上方实时面板
 │       ├── tail.js       # 聊天流内思考总结条
+│       ├── views.js      # "思考总结"视图选项卡
 │       └── styles.js     # 样式（原生 token）
-├── docs/                 # 文档（design / probe-notes / segment-optimization）
-└── README.md
+├── docs/                 # 开发文档（design / probe-notes / segment-optimization / self-summary-mode；仅仓库内，不随包发布）
+├── assets/screenshots/   # README 展示图片（随包发布）
+└── README.md             # 使用者文档（随包发布）
 ```
 
 - **构建**：`tsc` 编译 Host（lib/index.js + 类型）；`scripts/build-client.mjs`

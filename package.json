@@ -33,14 +33,16 @@
     "scripts",
     "cordis.patch.yml",
     "README.md",
-    "docs"
+    "assets"
   ],
   "author": "zzj <3318897344@qq.com>",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "watch": "tsc -p tsconfig.json --watch"
+    "watch": "tsc -p tsconfig.json --watch",
+    "watch:client": "node scripts/watch-client.mjs",
+    "watch:all": "node scripts/watch-all.mjs"
   },
   "keywords": [
     "dsh",
