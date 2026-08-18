@@ -75,6 +75,14 @@ export class ThinkStateStore {
   /** 状态变更监听（持久化写盘用）。 */
   private listeners = new Set<() => void>()
 
+  /**
+   * 全局暂停（客户端标题栏"暂停"按钮，非设置项）：
+   * 暂停后不再检测/分段/精炼/兜底任何新思考，旧总结照常显示；
+   * 与配置 enabled 区分：enabled=false 客户端隐藏全部总结 UI，
+   * paused=true 仅停止新产出，UI 保留。
+   */
+  paused = false
+
   get(sessionId: string): ThinkState | undefined {
     return this.map.get(sessionId)
   }

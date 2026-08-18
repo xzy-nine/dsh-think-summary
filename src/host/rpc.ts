@@ -1,5 +1,5 @@
 import type { ThinkStateStore } from './state.js'
-import { whenWebServer, writeJson, type RouteReq, type RouteRes } from './webserver.js'
+import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
 import type { CtxLike } from './ctx.js'
 import type { ThinkSummaryConfig } from './config.js'
 
@@ -13,10 +13,13 @@ interface LlmLike {
  *  - 发布版：webServer 路由 `/api/think-summary/state`（浏览器 fetch，响应式注册）。
  *    `sessionId` 可省略——缺省返回最近活跃会话的状态（侧边栏面板是 root
  *    作用域，没有 sessionId props）。响应带 `enabled`（插件总开关，供客户端
- *    门控：关闭时不渲染任何总结 UI）。
+ *    门控：关闭时不渲染任何总结 UI）与 `paused`（全局暂停，供标题栏按钮显示）。
  *  - `/api/think-summary/models`：精炼模型下拉数据源——当前默认选中模型
  *    （agentDefaultModel.currentSelection()）与其 provider 的可用模型列表
  *    （llm.listModels），供设置页下拉菜单自动识别。
+ *  - `/api/think-summary/pause`（POST，loopback-only）：切换全局暂停。
+ *    暂停后不再检测/分段/精炼/兜底新思考，旧总结照常显示；与配置 enabled
+ *    区分（enabled=false 隐藏全部 UI，paused=true 仅停止新产出）。
  *  - 动态插件开发版：全局 harness.handle（host.call）
  */
 export function installRpc(ctx: CtxLike, store: ThinkStateStore, getOptions?: () => ThinkSummaryConfig): void {
@@ -25,7 +28,7 @@ export function installRpc(ctx: CtxLike, store: ThinkStateStore, getOptions?: ()
   if (harness && typeof harness.handle === 'function') {
     harness.handle('think-summary/state', (args: { sessionId?: string }) => {
       const sid = typeof args?.sessionId === 'string' && args.sessionId.length > 0 ? args.sessionId : store.lastActive
-      return { enabled: enabled(), state: sid !== undefined ? store.view(sid) : undefined }
+      return { enabled: enabled(), paused: store.paused, state: sid !== undefined ? store.view(sid) : undefined }
     })
   }
 
@@ -39,12 +42,27 @@ export function installRpc(ctx: CtxLike, store: ThinkStateStore, getOptions?: ()
           const sidParam = url.searchParams.get('sessionId')
           const sid = typeof sidParam === 'string' && sidParam.length > 0 ? sidParam : store.lastActive
           if (sid === undefined) {
-            writeJson(res, 200, { enabled: enabled(), state: null })
+            writeJson(res, 200, { enabled: enabled(), paused: store.paused, state: null })
             return
           }
-          writeJson(res, 200, { enabled: enabled(), state: store.view(sid) ?? null })
+          writeJson(res, 200, { enabled: enabled(), paused: store.paused, state: store.view(sid) ?? null })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    })
+
+    webServer.register({
+      kind: 'exact',
+      path: '/api/think-summary/pause',
+      handler: async (req: RouteReq, res: RouteRes) => {
+        if (!isLoopback(req)) return writeJson(res, 403, { ok: false, code: 'forbidden', message: 'loopback-only' })
+        try {
+          const body = await readJsonBody<{ paused?: boolean }>(req)
+          store.paused = body?.paused === true
+          writeJson(res, 200, { ok: true, paused: store.paused })
+        } catch (error) {
+          writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
         }
       },
     })

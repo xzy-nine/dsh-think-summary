@@ -14,10 +14,16 @@ const PANEL_CSS = `
 /* ---------- 输入框上方实时面板（对齐原生 QueueDock） ---------- */
 .ts-dock{box-sizing:border-box;flex:none;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto;padding:0 var(--dsh-composer-dock-inset)}
 .ts-dock-panel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);box-shadow:var(--dsw-shadow-lv1);border-radius:12px;width:100%;overflow:hidden}
-.ts-dock-head{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:transparent;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px 12px;display:flex;transition:background-color 120ms ease}
-.ts-dock-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-dock-head{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);text-align:left;align-items:center;gap:10px;padding:4px 8px 4px 4px;display:flex}
+.ts-dock-toggle{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;background:transparent;border:none;border-radius:8px;cursor:pointer;color:inherit;transition:background-color 120ms ease}
+.ts-dock-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .ts-dock-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .12s}
 .ts-dock[data-open="true"] .ts-dock-chevron{transform:rotate(180deg)}
+.ts-dock-paused{flex:none;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-primary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
+.ts-dock-pause{flex:none;white-space:nowrap;appearance:none;background:transparent;color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:2px 10px;font-size:11.5px;line-height:18px;cursor:pointer;transition:border-color 120ms ease,color 120ms ease,background-color 120ms ease}
+.ts-dock-pause:hover{border-color:var(--dsw-alias-label-dimmed);color:var(--dsw-alias-label-primary)}
+.ts-dock-pause.on{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
+.ts-dock-pause:disabled{opacity:.5;cursor:default}
 .ts-dock-title{color:var(--dsw-alias-label-primary);flex:none;font-size:13px;font-weight:500;line-height:24px}
 .ts-dock-progress{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:auto;font-size:13px;line-height:20px;overflow:hidden}
 .ts-dock-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-state-warn-primary)}

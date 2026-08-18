@@ -44,6 +44,7 @@ export function installDetect(
   ctx.on('llm/stream', (reqOptions, next) => {
     const opts = getOptions()
     if (opts.enabled === false) return next()
+    if (store.paused) return next() // 全局暂停（标题栏按钮）：停止新思考检测，旧总结照常显示
     const ro = reqOptions as { sessionId?: string; provider?: string; model?: string }
     if (opts.filterNonAgentLoop && !ro.sessionId) return next()
 

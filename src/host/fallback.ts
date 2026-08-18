@@ -54,6 +54,7 @@ export function installFallback(
     try {
       const opts = getOptions()
       if (opts.enabled === false) return
+      if (store.paused) return // 全局暂停：停止兜底补跑，旧总结照常显示
       const threshold = opts.thinkThresholdTokens ?? 2000
       const e = event as {
         type?: string

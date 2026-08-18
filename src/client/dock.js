@@ -21,10 +21,11 @@ function isChatTabActive() {
 function makeInputDock() {
   return function ThinkInputDock(props) {
     const sessionId = props && props.sessionId
-    const { state, enabled } = useThinkState(sessionId)
+    const { state, enabled, paused } = useThinkState(sessionId)
     const [open, setOpen] = React.useState(true)
     const [prevOpen, setPrevOpen] = React.useState(false)
     const [chatView, setChatView] = React.useState(true)
+    const [pauseBusy, setPauseBusy] = React.useState(false)
 
     // 视图过滤：只在"对话"视图显示（轨迹/思考总结等视图隐藏）。
     // 会话 store 的 view 状态在 slot 组件侧不可订阅，故定时检测 tablist 的
@@ -39,6 +40,25 @@ function makeInputDock() {
 
     if (!enabled) return null // 插件总开关关闭：不显示实时思考面板
     if (!chatView) return null // 非"对话"视图：隐藏实时思考面板
+
+    // 暂停/继续（全局，非设置项）：暂停后不再产出新总结，旧内容照常显示
+    const togglePause = async () => {
+      if (pauseBusy) return
+      setPauseBusy(true)
+      try {
+        const res = await fetch(PAUSE_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paused: !paused }),
+        })
+        // 状态由轮询刷新（1.5s 内同步）；失败则下次轮询回弹
+        void res.json().catch(() => undefined)
+      } catch {
+        /* 失败忽略：轮询会恢复显示 */
+      } finally {
+        setPauseBusy(false)
+      }
+    }
 
     // 只取"当前这次思考"：活跃的 think 优先；无活跃则最近一次（常驻显示最近一次）
     let think = null
@@ -112,24 +132,43 @@ function makeInputDock() {
     }
 
     return React.createElement(
-      'div', { className: 'ts-dock' },
+      'div', { className: 'ts-dock', 'data-open': open ? 'true' : 'false' },
       React.createElement(
-        'div', { className: 'ts-dock-panel', 'data-open': open ? 'true' : 'false' },
+        'div', { className: 'ts-dock-panel' },
         React.createElement(
-          'button',
-          { type: 'button', className: 'ts-dock-head', onClick: () => setOpen(!open) },
-          chevronEl('ts-dock-chevron'),
+          'div', { className: 'ts-dock-head' },
+          // 折叠开关独立为小箭头按钮：点击箭头收起/展开，标题栏其他区域不再响应
+          React.createElement(
+            'button',
+            {
+              type: 'button', className: 'ts-dock-toggle', 'aria-expanded': open ? 'true' : 'false',
+              title: open ? '收起' : '展开', onClick: () => setOpen(!open),
+            },
+            chevronEl('ts-dock-chevron'),
+          ),
           React.createElement('span', { className: 'ts-dock-title' }, '思考总结'),
           React.createElement(
             'span', { className: 'ts-dock-progress' },
             think === null
               ? '等待思考…'
-              : active
-                ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
-                : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
+              : paused
+                ? '已暂停 · 不再更新'
+                : active
+                  ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
+                  : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
           ),
-          active ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
+          paused ? React.createElement('span', { className: 'ts-dock-paused' }, '暂停') : null,
+          active && !paused ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
           refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined' }, refinedCount + ' 段已精炼') : null,
+          React.createElement(
+            'button',
+            {
+              type: 'button', className: 'ts-dock-pause' + (paused ? ' on' : ''),
+              disabled: pauseBusy, title: paused ? '继续思考总结' : '暂停思考总结（旧内容保留）',
+              onClick: () => void togglePause(),
+            },
+            paused ? '继续' : '暂停',
+          ),
         ),
         open ? React.createElement('div', { className: 'ts-dock-body' }, body) : null,
       ),

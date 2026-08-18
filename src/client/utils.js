@@ -51,11 +51,12 @@ function segHeadLabel(s, prefix) {
 
 /**
  * 轮询会话思考状态（dock/views 共用）。
- * 每 1.5s fetch STATE_ROUTE；返回 { state, enabled }。
+ * 每 1.5s fetch STATE_ROUTE；返回 { state, enabled, paused }。
  */
 function useThinkState(sessionId) {
   const [state, setState] = React.useState(null)
   const [enabled, setEnabled] = React.useState(true)
+  const [paused, setPaused] = React.useState(false)
   React.useEffect(() => {
     if (!sessionId) return undefined
     let alive = true
@@ -67,6 +68,7 @@ function useThinkState(sessionId) {
         const json = await res.json()
         if (!alive) return
         setEnabled(!json || json.enabled !== false)
+        setPaused(!json || json.paused === true)
         setState((json && json.state) || null)
       } catch {
         /* 轮询失败不影响 */
@@ -82,7 +84,7 @@ function useThinkState(sessionId) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
-  return { state, enabled }
+  return { state, enabled, paused }
 }
 
 /**

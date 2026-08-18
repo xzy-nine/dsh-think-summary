@@ -171,13 +171,14 @@ New-Item -ItemType Junction -Path "$HOME\.dsh\profiles\web\node_modules\dsh-thin
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/think-summary/state?sessionId=` | 会话思考状态视图（`enabled` + `state`；sessionId 缺省用最近活跃会话） |
+| GET | `/api/think-summary/state?sessionId=` | 会话思考状态视图（`enabled` + `paused` + `state`；sessionId 缺省用最近活跃会话） |
 | GET | `/api/think-summary/models` | 精炼模型下拉数据源：当前默认选中模型 + 该 provider 可用模型列表 |
 | POST | `/api/think-summary/settings/describe` | 设置命名空间视图（value/base/user/revision/writable） |
 | POST | `/api/think-summary/settings/mutate` | 逐字段 set/unset（revision 围栏） |
 | POST | `/api/think-summary/clear-archived` | 清理已归档会话总结（`{ graceMs? }`，缺省保留最近 24h） |
+| POST | `/api/think-summary/pause` | 切换全局暂停（`{ paused }`）：暂停后不再产出新总结，旧内容保留 |
 
-settings 与 clear-archived 接口为 loopback-only（拒绝非本机来源）。
+settings / clear-archived / pause 接口为 loopback-only（拒绝非本机来源）。
 
 ## 开发
 
