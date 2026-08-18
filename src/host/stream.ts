@@ -117,24 +117,28 @@ export function installDetect(
 
     const inner = next()
     return (async function* () {
-      // 本流是否被暂停打断过：一旦打断，整流忽略总结（恢复后也不继续，
-      // 只有下一个新的 llm/stream 流才重新开始总结）。
-      let pausedHit = false
+      let wasPaused = store.paused
       try {
         try {
           for await (const chunk of inner) {
             const c = chunk as { type?: string; blockType?: string; text?: string }
             const t = c && c.type
-            // 全局暂停：进行中的流也立即停止总结产出（不累计/不分段/不捕获），
-            // 模型输出照常透传；已产出的旧总结保留。
-            if (store.paused) pausedHit = true
-            const ignore = pausedHit
+            // 全局暂停：忽略暂停期间的流内容（reasoning-delta 不进总结管线），
+            // 模型输出照常透传。
+            const paused = store.paused
+            // 暂停边沿（false → true）：丢弃当前未分段的累积内容，恢复后从新流开始
+            if (paused && !wasPaused) {
+              segmenter.resetForPause()
+              self?.flush() // 未闭合自产小结丢弃
+            }
+            wasPaused = paused
             if (t === 'block-start') {
-              // reasoning → 其他块类型：思考段结束的强信号
-              if (!ignore && blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
+              // reasoning → 其他块类型：思考段结束的强信号（思考阶段信号，
+              // 不受暂停影响——暂停期间思考结束也要把暂停前缓冲切段）
+              if (blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
               blockType = c.blockType ?? null
             } else if (t === 'reasoning-delta' && typeof c.text === 'string' && c.text.length > 0) {
-              if (!ignore) {
+              if (!paused) {
                 self?.feed(c.text) // 主模型自产小结捕获（selfSummary 模式）
                 const raw = segmenter.feed(c.text) // 一次扫描，与检测器共享
                 detector.feedRaw(raw, {
@@ -148,21 +152,19 @@ export function installDetect(
                 state.updatedAt = Date.now()
               }
             } else if (t === 'finish') {
-              if (!ignore) {
-                self?.flush()
-                segmenter.flush()
-              }
+              // 始终 flush：暂停期间未 feed（缓冲已清空），flush 的是
+              // 暂停前/恢复后的有效内容
+              self?.flush()
+              segmenter.flush()
               store.endThink(key, think.id)
             }
             yield chunk
           }
         } finally {
           // abort/提前结束/无 finish 的 provider：flush 尾巴并收尾（幂等）。
-          // 暂停打断过的流不 flush——被打断轮次的内容不产出新总结
-          if (!pausedHit) {
-            self?.flush()
-            segmenter.flush()
-          }
+          // 同样始终 flush（缓冲内容均为未暂停期间 feed 的有效内容）
+          self?.flush()
+          segmenter.flush()
           store.endThink(key, think.id)
         }
       } catch (err) {

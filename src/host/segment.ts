@@ -354,6 +354,28 @@ export class Segmenter {
   get bufferedTokens(): number {
     return this.tokenCount()
   }
+
+  /**
+   * 暂停边沿调用：丢弃当前**未分段**的累积内容（缓冲/pending/计数/忽略区/
+   * keep 模式状态），恢复后从空缓冲接收新流。已产出的段（emit 出去的）
+   * 不受影响；min/max/canCut/emit 配置保留。
+   */
+  resetForPause(): void {
+    this.buf = ''
+    this.cjk = 0
+    this.other = 0
+    this.pending = ''
+    this.pendingCjk = 0
+    this.pendingOther = 0
+    this.ignore = 'none'
+    this.metaLines = 0
+    this.metaLang = ''
+    this.ignoreTokens = 0
+    this.pendingIgnoreTokens = 0
+    this.inCode = false
+    this.inTable = false
+    this.lastHash = ''
+  }
 }
 
 /**
