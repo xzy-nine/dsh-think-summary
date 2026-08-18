@@ -26,6 +26,10 @@ function makeInputDock() {
     const [prevOpen, setPrevOpen] = React.useState(false)
     const [chatView, setChatView] = React.useState(true)
     const [pauseBusy, setPauseBusy] = React.useState(false)
+    // 自动滚底（对齐"思考总结"选项卡行为）：数据更新时若停在底部则跟随滚底，
+    // 用户上滚即锁定，滚回底部自动恢复
+    const bodyRef = React.useRef(null)
+    const atBottomRef = React.useRef(true)
 
     // 视图过滤：只在"对话"视图显示（轨迹/思考总结等视图隐藏）。
     // 会话 store 的 view 状态在 slot 组件侧不可订阅，故定时检测 tablist 的
@@ -37,6 +41,21 @@ function makeInputDock() {
       const timer = setInterval(check, 1500)
       return () => { alive = false; clearInterval(timer) }
     }, [])
+
+    // 滚底跟随：state（新分段/新思考）更新后，仅当用户停在底部才滚到底部。
+    // 首次挂载强制滚底；scroll 事件实时更新 atBottom。
+    React.useEffect(() => {
+      const el = bodyRef.current
+      if (!el) return undefined
+      const update = () => {
+        const floor = Math.max(0, el.scrollHeight - el.clientHeight)
+        atBottomRef.current = floor - el.scrollTop <= 25
+      }
+      el.addEventListener('scroll', update, { passive: true })
+      update()
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight
+      return () => el.removeEventListener('scroll', update)
+    }, [state])
 
     if (!enabled) return null // 插件总开关关闭：不显示实时思考面板
     if (!chatView) return null // 非"对话"视图：隐藏实时思考面板
@@ -171,7 +190,7 @@ function makeInputDock() {
             playPauseIconEl('ts-dock-pause-icon', paused),
           ),
         ),
-        open ? React.createElement('div', { className: 'ts-dock-body' }, body) : null,
+        open ? React.createElement('div', { className: 'ts-dock-body', ref: bodyRef }, body) : null,
       ),
     )
   }
