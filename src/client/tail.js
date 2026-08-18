@@ -24,28 +24,33 @@ function makeThinkTail() {
       let alive = true
       let timer = null
       let tries = 0
+      // 重试窗口：思考长/事件打标可能延迟，最多约 60s（40 次 × 1.5s）
+      const MAX_TRIES = 40
       const load = async () => {
+        let matched = []
         try {
           const res = await fetch(STATE_ROUTE + '?sessionId=' + encodeURIComponent(sessionId))
-          if (!res.ok) return
-          const json = await res.json()
-          if (!alive) return
-          setEnabled(!json || json.enabled !== false)
-          const state = json && json.state
-          if (!state) return
-          // 该 turn 的所有有段 think（区分每次思考：多 step 思考各自成组）
-          const matched = (state.thinks || [])
-            .filter((t) => t.turn === turn.turn && t.segments && t.segments.length > 0)
-            .sort((a, b) => (a.step ?? 0) - (b.step ?? 0))
-          if (matched.length > 0) {
-            setThinks(matched)
-            return // 找到即停（含精炼完成的标记）
+          if (res.ok) {
+            const json = await res.json()
+            if (alive) setEnabled(!json || json.enabled !== false)
+            const state = json && json.state
+            matched = state && (state.thinks || []).length > 0
+              ? (state.thinks || [])
+                  .filter((t) => t.turn === turn.turn && t.segments && t.segments.length > 0)
+                  .sort((a, b) => (a.step ?? 0) - (b.step ?? 0))
+              : []
           }
         } catch {
-          /* 轮询失败不渲染 */
+          /* 轮询失败：继续重试 */
         }
+        if (!alive) return
+        if (matched.length > 0) {
+          setThinks(matched)
+          return // 找到即停（含精炼完成的标记）
+        }
+        // 未找到（请求失败/state 为空/无匹配）都继续重试，直到窗口上限
         tries++
-        if (tries < 8) timer = setTimeout(load, 1200)
+        if (tries < MAX_TRIES) timer = setTimeout(load, 1500)
       }
       void load()
       return () => {

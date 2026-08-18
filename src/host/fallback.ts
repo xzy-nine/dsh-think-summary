@@ -54,7 +54,6 @@ export function installFallback(
     try {
       const opts = getOptions()
       if (opts.enabled === false) return
-      if (store.paused) return // 全局暂停：停止兜底补跑，旧总结照常显示
       const threshold = opts.thinkThresholdTokens ?? 2000
       const e = event as {
         type?: string
@@ -68,6 +67,8 @@ export function installFallback(
       const step = e.data.step ?? 0
 
       if (e.type === 'assistant/chunk') {
+        // 暂停时停止累积：不再有新总结产出
+        if (store.paused) return
         const chunk = e.data.chunk
         if (chunk && chunk.type === 'reasoning-delta' && typeof chunk.text === 'string' && chunk.text.length > 0) {
           const k = `${sid}:${turn}:${step}`
@@ -90,7 +91,9 @@ export function installFallback(
         // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配）。
         // 从后往前找"最后一个 s 开头、未打标"的 think（该步 llm/stream 刚结束；
         // 不检查 active——assistant/message 事件可能先于流收尾的 endThink 到达，
-        // 依赖 active 会漏打标或把标打到错误的 step 上）
+        // 依赖 active 会漏打标或把标打到错误的 step 上）。
+        // 打标是元数据，暂停时也执行——否则暂停期间结束的思考失去 turn 标记，
+        // 聊天流内总结条（turnTail 按 turn 匹配）将永远显示不出来
         for (let i = state.thinks.length - 1; i >= 0; i--) {
           const t = state.thinks[i]
           if (t && t.id.startsWith('s') && t.turn === undefined) {
@@ -99,6 +102,8 @@ export function installFallback(
             break
           }
         }
+        // 暂停：不补跑分段总结（旧总结照常显示），但上面的打标已执行
+        if (store.paused) return
         if (!entry || entry.text.length === 0) return
         // 与实时一致：未达长思考阈值（短思考，如工具调用间的几十 token 思考）
         // 不产出段——实时路径由 inSplice 门控不出段，兜底也必须一致，
