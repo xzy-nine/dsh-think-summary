@@ -143,7 +143,7 @@ New-Item -ItemType Junction -Path "$HOME\.dsh\profiles\web\node_modules\dsh-thin
 | 小模型精炼 | 精炼预算 | `1024` | 精炼 API 完成预算（推理 + 答案），token |
 | 小模型精炼 | 精炼并发 | `3` | 并行精炼数；任务之间互不打断 |
 | 小模型精炼 | 精炼超时 | `60` | 单任务超时（秒）；卡死任务超时放弃并释放并发位 |
-| 小模型精炼 | 精炼模型 | `auto` | `'auto'` = 会话 provider 最小可用模型；可显式指定 |
+| 小模型精炼 | 精炼模型 | `auto` | 下拉选择：`auto`（推荐）= 精炼时自动选用当前会话 provider 的最小可用模型（显示当前会话模型）；或从可用模型列表固定指定 |
 | 小模型精炼 | 精炼提示词 | （默认模板） | 精炼时发给模型的 system 提示词，可修改（留空恢复默认） |
 | 主模型自产小结 | 模式 | `off` | 关闭 / `prompt`（注入提示词并流内捕获【思考小结】直接展示） |
 | 存储与清理 | 持久化保存 | `true` | 保存思考总结到 `~/.dsh/dsh-think-summary.json`，重启后仍可查看 |
@@ -172,6 +172,7 @@ New-Item -ItemType Junction -Path "$HOME\.dsh\profiles\web\node_modules\dsh-thin
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/think-summary/state?sessionId=` | 会话思考状态视图（`enabled` + `state`；sessionId 缺省用最近活跃会话） |
+| GET | `/api/think-summary/models` | 精炼模型下拉数据源：当前默认选中模型 + 该 provider 可用模型列表 |
 | POST | `/api/think-summary/settings/describe` | 设置命名空间视图（value/base/user/revision/writable） |
 | POST | `/api/think-summary/settings/mutate` | 逐字段 set/unset（revision 围栏） |
 | POST | `/api/think-summary/clear-archived` | 清理已归档会话总结（`{ graceMs? }`，缺省保留最近 24h） |

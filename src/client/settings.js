@@ -53,7 +53,7 @@ const FIELD_GROUPS = [
       { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
       { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
       { key: 'refineTimeout', label: '精炼超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死任务超时放弃并释放并发位' },
-      { key: 'refineModel', label: '精炼模型', kind: 'text', hint: "'auto' = 最小可用模型；可显式指定" },
+      { key: 'refineModel', label: '精炼模型', kind: 'model', hint: 'auto（推荐）= 精炼时自动选用当前会话 provider 的最小可用模型；或从列表固定指定。选 auto 时下方显示当前会话模型' },
       { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
     ],
   },
@@ -180,8 +180,30 @@ function makeSettingsCard(scope) {
     const [seed, setSeed] = React.useState(0)
     const [open, setOpen] = React.useState(false)
     const [cleanBusy, setCleanBusy] = React.useState(false)
+    // 精炼模型下拉：可用模型列表 + 当前默认选中模型（auto 时显示）
+    const [models, setModels] = React.useState([])
+    const [currentModel, setCurrentModel] = React.useState('')
     // 分组折叠状态：默认全部折叠
     const [groupOpen, setGroupOpen] = React.useState({})
+
+    // 加载精炼模型下拉数据（可用模型 + 当前选中）
+    React.useEffect(() => {
+      let alive = true
+      const load = async () => {
+        try {
+          const response = await fetch(MODELS_ROUTE)
+          if (!response.ok) return
+          const json = await response.json()
+          if (!alive || !json || json.ok !== true) return
+          if (Array.isArray(json.models)) setModels(json.models)
+          if (typeof json.current === 'string') setCurrentModel(json.current)
+        } catch {
+          /* 模型目录不可用：下拉只剩"自动" */
+        }
+      }
+      void load()
+      return () => { alive = false }
+    }, [])
 
     React.useEffect(() => {
       const sync = () => setSnap(scope.getSnapshot())
@@ -359,6 +381,34 @@ function makeSettingsCard(scope) {
               disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
             },
             (f.options || []).map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
+          )
+        } else if (f.kind === 'model') {
+          // 精炼模型下拉：'auto' + 可用模型列表；auto 时显示当前选中模型
+          const cur = value || 'auto'
+          const opts = [['auto', '自动（' + (currentModel || '最小可用模型') + '）']]
+          const seen = new Set(['auto'])
+          for (const m of models) {
+            if (typeof m === 'string' && m.length > 0 && !seen.has(m)) {
+              seen.add(m)
+              opts.push([m, m])
+            }
+          }
+          // 保存值不在列表（如旧自定义值）：保留为额外选项
+          if (!seen.has(cur)) opts.push([cur, cur])
+          const currentNote = cur === 'auto' && currentModel
+            ? React.createElement('p', { className: 'ts-set-hint' }, '当前会话模型：' + currentModel + '（精炼将自动选用最小可用模型）')
+            : null
+          control = React.createElement(
+            React.Fragment, null,
+            React.createElement(
+              'select',
+              {
+                className: 'ts-set-input', value: cur,
+                disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
+              },
+              opts.map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
+            ),
+            currentNote,
           )
         } else {
           control = React.createElement('input', {
