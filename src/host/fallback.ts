@@ -66,7 +66,29 @@ export function installFallback(
       const turn = e.data.turn ?? 0
       const step = e.data.step ?? 0
 
+      /**
+       * 给实时路径（s 开头）的最新未打标 think 打 (turn, step) 标记，
+       * 供聊天流内 turnTail 按 turn 匹配。幂等：已打标/无未打标则跳过。
+       * 在 assistant/chunk（流进行中）与 assistant/message（流结束）都调用，
+       * 双保险——事件流偶发缺失时任一触发即可打标。
+       * 打标是元数据，暂停时也执行（暂停只停止新总结产出）。
+       */
+      const tagRealtimeThink = () => {
+        const s = store.get(sid)
+        if (!s) return
+        for (let i = s.thinks.length - 1; i >= 0; i--) {
+          const t = s.thinks[i]
+          if (t && t.id.startsWith('s') && t.turn === undefined) {
+            t.turn = turn
+            t.step = step
+            break
+          }
+        }
+      }
+
       if (e.type === 'assistant/chunk') {
+        // 流进行中：先打标（不依赖 assistant/message 是否到达）
+        tagRealtimeThink()
         // 暂停时停止累积：不再有新总结产出
         if (store.paused) return
         const chunk = e.data.chunk
@@ -94,14 +116,7 @@ export function installFallback(
         // 依赖 active 会漏打标或把标打到错误的 step 上）。
         // 打标是元数据，暂停时也执行——否则暂停期间结束的思考失去 turn 标记，
         // 聊天流内总结条（turnTail 按 turn 匹配）将永远显示不出来
-        for (let i = state.thinks.length - 1; i >= 0; i--) {
-          const t = state.thinks[i]
-          if (t && t.id.startsWith('s') && t.turn === undefined) {
-            t.turn = turn
-            t.step = step
-            break
-          }
-        }
+        tagRealtimeThink()
         // 暂停：不补跑分段总结（旧总结照常显示），但上面的打标已执行
         if (store.paused) return
         if (!entry || entry.text.length === 0) return
