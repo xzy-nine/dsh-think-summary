@@ -12,14 +12,19 @@ README 展示图片统一放这里（`assets/screenshots/`）。
 
 ## 命名建议
 
-- 语义化、kebab-case：如 `live-panel.png`、`settings-card.png`、
-  `chat-turn-tail.png`、`summary-view.png`；
-- 截图建议压缩（PNG/WebP），单张 < 500KB，README 首屏不拖慢。
+- 语义化、kebab-case：如 `live-panel.webp`、`settings-card.webp`、
+  `chat-turn-tail.webp`、`summary-view.webp`；
+- 截图建议用 **WebP**（质量 80–85，缩放至 ≤1600px 宽），单张 < 150KB，
+  README 首屏不拖慢。转换示例（ffmpeg）：
+
+```powershell
+ffmpeg -i 原图.png -vf "scale=1600:-1:flags=lanczos" -c:v libwebp -quality 82 -compression_level 6 输出.webp
+```
 
 ## 在 README 中引用
 
 ```markdown
-![实时面板](assets/screenshots/live-panel.png)
+![实时面板](assets/screenshots/live-panel.webp)
 ```
 
 > 相对路径以**仓库根**为基准（`assets/screenshots/`），不带前导 `./` 更稳。
