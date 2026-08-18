@@ -122,33 +122,43 @@ export function installDetect(
           for await (const chunk of inner) {
             const c = chunk as { type?: string; blockType?: string; text?: string }
             const t = c && c.type
+            // 全局暂停：进行中的流也立即停止总结产出（不累计/不分段/不捕获），
+            // 模型输出照常透传；已产出的旧总结保留。
+            const paused = store.paused
             if (t === 'block-start') {
               // reasoning → 其他块类型：思考段结束的强信号
-              if (blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
+              if (!paused && blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
               blockType = c.blockType ?? null
             } else if (t === 'reasoning-delta' && typeof c.text === 'string' && c.text.length > 0) {
-              self?.feed(c.text) // 主模型自产小结捕获（selfSummary 模式）
-              const raw = segmenter.feed(c.text) // 一次扫描，与检测器共享
-              detector.feedRaw(raw, {
-                onSpliceStart: () => {
-                  state.inSplice = true
-                  state.updatedAt = Date.now()
-                },
-              })
-              think.tokens = detector.thinkingTokens
-              state.thinkingTokens = think.tokens
-              state.updatedAt = Date.now()
+              if (!paused) {
+                self?.feed(c.text) // 主模型自产小结捕获（selfSummary 模式）
+                const raw = segmenter.feed(c.text) // 一次扫描，与检测器共享
+                detector.feedRaw(raw, {
+                  onSpliceStart: () => {
+                    state.inSplice = true
+                    state.updatedAt = Date.now()
+                  },
+                })
+                think.tokens = detector.thinkingTokens
+                state.thinkingTokens = think.tokens
+                state.updatedAt = Date.now()
+              }
             } else if (t === 'finish') {
-              self?.flush()
-              segmenter.flush()
+              if (!paused) {
+                self?.flush()
+                segmenter.flush()
+              }
               store.endThink(key, think.id)
             }
             yield chunk
           }
         } finally {
-          // abort/提前结束/无 finish 的 provider：flush 尾巴并收尾（幂等）
-          self?.flush()
-          segmenter.flush()
+          // abort/提前结束/无 finish 的 provider：flush 尾巴并收尾（幂等）。
+          // 暂停时不 flush——暂停期间积累的内容不产出新总结
+          if (!store.paused) {
+            self?.flush()
+            segmenter.flush()
+          }
           store.endThink(key, think.id)
         }
       } catch (err) {
