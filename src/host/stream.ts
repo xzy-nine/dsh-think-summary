@@ -117,6 +117,9 @@ export function installDetect(
 
     const inner = next()
     return (async function* () {
+      // 本流是否被暂停打断过：一旦打断，整流忽略总结（恢复后也不继续，
+      // 只有下一个新的 llm/stream 流才重新开始总结）。
+      let pausedHit = false
       try {
         try {
           for await (const chunk of inner) {
@@ -124,13 +127,14 @@ export function installDetect(
             const t = c && c.type
             // 全局暂停：进行中的流也立即停止总结产出（不累计/不分段/不捕获），
             // 模型输出照常透传；已产出的旧总结保留。
-            const paused = store.paused
+            if (store.paused) pausedHit = true
+            const ignore = pausedHit
             if (t === 'block-start') {
               // reasoning → 其他块类型：思考段结束的强信号
-              if (!paused && blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
+              if (!ignore && blockType === 'reasoning' && c.blockType !== 'reasoning') segmenter.signalBoundary()
               blockType = c.blockType ?? null
             } else if (t === 'reasoning-delta' && typeof c.text === 'string' && c.text.length > 0) {
-              if (!paused) {
+              if (!ignore) {
                 self?.feed(c.text) // 主模型自产小结捕获（selfSummary 模式）
                 const raw = segmenter.feed(c.text) // 一次扫描，与检测器共享
                 detector.feedRaw(raw, {
@@ -144,7 +148,7 @@ export function installDetect(
                 state.updatedAt = Date.now()
               }
             } else if (t === 'finish') {
-              if (!paused) {
+              if (!ignore) {
                 self?.flush()
                 segmenter.flush()
               }
@@ -154,8 +158,8 @@ export function installDetect(
           }
         } finally {
           // abort/提前结束/无 finish 的 provider：flush 尾巴并收尾（幂等）。
-          // 暂停时不 flush——暂停期间积累的内容不产出新总结
-          if (!store.paused) {
+          // 暂停打断过的流不 flush——被打断轮次的内容不产出新总结
+          if (!pausedHit) {
             self?.flush()
             segmenter.flush()
           }
