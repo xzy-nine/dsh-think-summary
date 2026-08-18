@@ -157,17 +157,18 @@ function makeInputDock() {
                   ? '思考中 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段'
                   : '思考结束 · ' + fmtTok(think.tokens) + ' tok · ' + think.segments.length + ' 段',
           ),
-          paused ? React.createElement('span', { className: 'ts-dock-paused' }, '暂停') : null,
+          paused ? React.createElement('span', { className: 'ts-dock-paused' }, '已暂停') : null,
           active && !paused ? React.createElement('span', { className: 'ts-dock-dot' }) : null,
           refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined' }, refinedCount + ' 段已精炼') : null,
           React.createElement(
             'button',
             {
               type: 'button', className: 'ts-dock-pause' + (paused ? ' on' : ''),
-              disabled: pauseBusy, title: paused ? '继续思考总结' : '暂停思考总结（旧内容保留）',
-              onClick: () => void togglePause(),
+              'aria-label': paused ? '继续思考总结' : '暂停思考总结（旧内容保留）',
+              title: paused ? '继续思考总结' : '暂停思考总结（旧内容保留）',
+              disabled: pauseBusy, onClick: () => void togglePause(),
             },
-            paused ? '继续' : '暂停',
+            playPauseIconEl('ts-dock-pause-icon', paused),
           ),
         ),
         open ? React.createElement('div', { className: 'ts-dock-body' }, body) : null,
