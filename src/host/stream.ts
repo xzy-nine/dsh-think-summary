@@ -45,8 +45,13 @@ export function installDetect(
     const opts = getOptions()
     if (opts.enabled === false) return next()
     if (store.paused) return next() // 全局暂停（标题栏按钮）：停止新思考检测，旧总结照常显示
-    const ro = reqOptions as { sessionId?: string; provider?: string; model?: string }
-    if (opts.filterNonAgentLoop && !ro.sessionId) return next()
+    const ro = reqOptions as { sessionId?: string; provider?: string; model?: string; purpose?: string }
+    // 旁路流过滤：rc.7 起 GenerateOptions.purpose 是官方分类（compaction/session-title 等
+    // 辅助调用），有值即非主会话思考流，直接跳过；旧宿主无 purpose 时回退 sessionId 启发式
+    if (opts.filterNonAgentLoop) {
+      if (typeof ro.purpose === 'string' && ro.purpose.length > 0) return next()
+      if (!ro.sessionId) return next()
+    }
 
     const key = resolveSession(ro.sessionId) ?? 'unknown'
     const { state, think } = store.beginThink(key)

@@ -71,6 +71,8 @@ const DISPLAY_MAX_CHARS = 240
 export interface LlmLike {
   stream(options: Record<string, unknown>): AsyncIterable<{ type?: string; text?: string }>
   listModels?(provider: string): Promise<Array<Record<string, unknown>>>
+  /** rc.7 精确模型元数据查询：返回含 context.contextWindow 的解析信息。 */
+  resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): Promise<Record<string, unknown>>
 }
 
 /** 裁剪为尾部预算 token（从前往后丢，保留结尾）。 */
@@ -109,28 +111,57 @@ function takeTokens(text: string, budget: number, dir: 1 | -1): string {
   return s
 }
 
-/** 'auto' 解析：provider 目录里上下文窗口最小的模型；失败回退主模型。 */
+/** 从模型目录条目里读上下文窗口（旧 listModels 启发式用的松散字段）。 */
+function modelContextWindow(m: Record<string, unknown>): number | undefined {
+  const context = m.context as { contextWindow?: number } | undefined
+  const direct =
+    (m.contextWindow as number | undefined) ??
+    (m.maxTokens as number | undefined) ??
+    (m.context as number | undefined)
+  return context?.contextWindow ?? direct
+}
+
+/**
+ * 'auto' 解析：provider 目录里上下文窗口最小的模型；失败回退主模型。
+ * rc.7 起 listModels 返回目录不再带 contextWindow，改为逐个
+ * llm.resolveModelInfo(provider, model) 精确查询（返回 context.contextWindow）
+ * 打分；宿主无 resolveModelInfo（旧版）时回退 listModels 字段启发式。
+ */
 export async function resolveModel(
   llm: LlmLike,
   provider: string,
   fallback: string,
 ): Promise<string> {
   try {
-    if (typeof llm.listModels === 'function') {
-      const models = await llm.listModels(provider)
-      const scored = (Array.isArray(models) ? models : [])
-        .filter((m) => m && typeof m.id === 'string')
-        .map((m) => ({
-          id: m.id as string,
-          score:
-            (m.contextWindow as number | undefined) ??
-            (m.maxTokens as number | undefined) ??
-            (m.context as number | undefined) ??
-            Number.MAX_SAFE_INTEGER,
-        }))
-        .sort((a, b) => a.score - b.score)
-      if (scored[0]) return scored[0].id
+    const models = typeof llm.listModels === 'function' ? await llm.listModels(provider) : []
+    const list = Array.isArray(models) ? models : []
+    const ids = list.map((m) => (m && typeof m.id === 'string' ? (m.id as string) : undefined)).filter((x): x is string => Boolean(x))
+    if (ids.length === 0) return fallback
+
+    // rc.7：resolveModelInfo 精确查询 context.contextWindow（N+1，候选少可接受）
+    if (typeof llm.resolveModelInfo === 'function') {
+      let best: { id: string; score: number } | undefined
+      for (const id of ids) {
+        try {
+          const info = await llm.resolveModelInfo(provider, id)
+          const score = modelContextWindow(info as Record<string, unknown>)
+          if (score === undefined) continue
+          if (best === undefined || score < best.score) best = { id, score }
+        } catch {
+          /* 单个模型查询失败：跳过，继续下一个 */
+        }
+      }
+      if (best !== undefined) return best.id
+      // 全部查询失败：回退目录顺序第一个
+      return ids[0] ?? fallback
     }
+
+    // 旧版回退：listModels 字段启发式
+    const scored = list
+      .filter((m) => m && typeof m.id === 'string')
+      .map((m) => ({ id: m.id as string, score: modelContextWindow(m) ?? Number.MAX_SAFE_INTEGER }))
+      .sort((a, b) => a.score - b.score)
+    if (scored[0]) return scored[0].id
   } catch {
     /* 目录不可用时回退主模型 */
   }

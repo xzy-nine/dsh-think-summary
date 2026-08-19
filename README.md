@@ -13,8 +13,9 @@
 ## 特性
 
 - **长思考检测**：`llm/stream` 瀑布实时观察 `reasoning-delta`，轻量 token 计数
-  （CJK 自适应、原始计数不取整），超过阈值自动进入分段模式；默认过滤无
-  sessionId 的旁路流（子代理 / 标题生成）。
+  （CJK 自适应、原始计数不取整），超过阈值自动进入分段模式；默认过滤
+  旁路流（`GenerateOptions.purpose` 非空 = 压缩/标题生成等辅助调用；无 purpose
+  的旧宿主回退 sessionId 启发式）。
 - **语义分段**：双阈值（最小窗口 1500 / 硬上限 3000 token）+ **Markdown 结构感知**
   （围栏状态机——代码块整体原子、围栏内不误切；表格整体保留；列表只在项边界切；
   标题/有序列表/任务项/引用/分隔线/行首结构词边界；max 强制切回溯到最近句末/行末；
@@ -152,7 +153,7 @@ New-Item -ItemType Junction -Path "$HOME\.dsh\profiles\web\node_modules\dsh-thin
 | 存储与清理 | 立即清理（按钮） | — | 立即删除所有非活跃会话的思考总结（默认宽限保留最近 24h） |
 
 > 另有 schema 级默认项（设置卡未暴露，可用配置/持久化直写）：
-> `filterNonAgentLoop`（默认 `true`，只处理带 sessionId 的请求）、
+> `filterNonAgentLoop`（默认 `true`，过滤 purpose 非空或缺失 sessionId 的旁路流）、
 > `refineMaxInputTokens`（默认 `1500`，精炼输入预算）。
 
 改动即时生效（阈值/开关在每次流开始时读取），无需重启。

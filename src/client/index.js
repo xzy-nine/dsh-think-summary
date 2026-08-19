@@ -14,10 +14,12 @@ export const inject = ['slots']
 
 export function apply(ctx) {
   try {
-    // 1) 设置卡片（官方插件配置区，直连自建设置桥）
+    // 1) 设置卡片（官方插件配置区，直连自建设置桥）。
+    //    rc.7 起 settings.plugin.item 是 keyed 槽位：注册必须传 key（= 设置命名空间），
+    //    旧的 id/order/label 写法会在声明时抛 keyed slot requires options.key。
     const scope = createBridgeScope()
     ctx.slots.inject('settings.plugin.item', () => ctx.slots.register(
-      { name: 'settings.plugin.item', id: 'think-summary', order: 120, label: 'think-summary' },
+      { name: 'settings.plugin.item', key: 'think-summary' },
       makeSettingsCard(scope),
     ))
     // 2) 聊天流内：turn 末尾的思考总结条（turn 级槽位，显示该 turn 全部思考分组）
