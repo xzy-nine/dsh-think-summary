@@ -163,4 +163,13 @@ const PANEL_CSS = `
 .ts-set-toggle-thumb{position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--dsw-alias-bg-layer-1);box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .12s}
 .ts-set-toggle[data-on="true"] .ts-set-toggle-thumb{left:15px}
 .ts-set-toggle:disabled{opacity:.5;cursor:default}
+/* ---------- 任务看板：把「翻译为中文」做成卡片内的页脚行（手动触发） ---------- */
+.ts-todo-wrap{box-sizing:border-box;flex:none;overflow:hidden;margin:0 auto;display:flex;flex-direction:column;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-specific-tip)}
+/* 官方面板只留内容：外框/圆角/底色由 .ts-todo-wrap 统一画，避免"卡中卡" */
+.ts-todo-wrap > section,.ts-todo-wrap > [data-testid="todo-panel"]{width:100%;max-width:none;margin:0;border:0;border-radius:0;background:0 0}
+.ts-todo-btn{appearance:none;font:inherit;cursor:pointer;width:100%;text-align:center;border:0;border-top:1px solid var(--dsw-alias-border-l1);background:0 0;color:var(--dsw-alias-label-tertiary);padding:5px 12px;font-size:12px;line-height:18px;transition:color .12s,background-color .12s}
+.ts-todo-btn:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.ts-todo-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.ts-todo-btn:disabled{opacity:.45;cursor:default}
+.ts-todo-btn--busy:disabled{opacity:.7}
 `

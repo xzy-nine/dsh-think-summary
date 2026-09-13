@@ -48,6 +48,11 @@ export interface ThinkSummaryConfig {
   refinePrompt?: string
   /** 整体（整次思考）摘要的 system 提示词（第二遍：段摘要 → 一句话整体动向）。 */
   refineThinkPrompt?: string
+  /**
+   * 任务翻译的 system 提示词（每行一条译文，顺序与行数不变）。
+   * 手动触发（看板上的按钮），宿主不判断哪些条目该翻。
+   */
+  todoTranslatePrompt?: string
   /** 并行精炼数（并发执行，任务之间互不打断）。 */
   refineConcurrency?: number
   /** 单任务超时（秒）：卡死任务超时放弃并释放并发位。 */
@@ -132,6 +137,25 @@ export const THINK_USER_TEMPLATE =
   '【分段摘要开始】\n{text}\n【分段摘要结束】\n\n'
   + '只输出这几次分段合并后的整体动向摘要（中文·第一人称·不超过30字）。'
 
+/**
+ * 任务看板翻译的 system 提示词（第三套提示词）。
+ * 目标是"每条一行、顺序不变、只给译文"，所以强调不要合并/不要序号/不要解释，
+ * 宿主才能按行一一对应地拼成 `原文（中文）`。
+ * 已是中文的条目要求**原样返回**：客户端遇到"译文 == 原文"不拼括注，
+ * 于是中英混排的清单里中文条目保持干净（宿主不再自己挑该翻哪些）。
+ */
+export const DEFAULT_TODO_PROMPT =
+  '你是任务清单翻译器。用户会给你若干条**英文任务**，每行一条。'
+  + '你把每一行翻译成简短中文（代码标识符、文件名、命令与专有名词保留原样不译）；'
+  + '已经是中文的行**原样返回**，不要改写、不要加译注。\n\n'
+  + '输出规则：**每行一条译文，行数与输入完全一致、顺序不变**；'
+  + '只输出译文本身，不要序号、不要原文、不要解释、不要空行、不要 markdown。'
+
+/** 任务翻译的 user 消息模板：任务逐行给出，要求写在后面。 */
+export const TODO_USER_TEMPLATE =
+  '【任务清单开始】\n{text}\n【任务清单结束】\n\n'
+  + '逐行输出对应中文译文（一行一条，顺序与行数不变，不要序号或解释）。'
+
 export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineProvider' | 'refineTrim' | 'codeBlockMode' | 'tableMode' | 'selfSummary'>> & {
   refineProvider: string
   refineModel: string
@@ -156,6 +180,7 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   refineModel: 'auto',
   refinePrompt: DEFAULT_REFINE_PROMPT,
   refineThinkPrompt: DEFAULT_THINK_PROMPT,
+  todoTranslatePrompt: DEFAULT_TODO_PROMPT,
   refineConcurrency: 3,
   refineTimeout: 60,
   codeBlockMode: 'ignore',
@@ -173,4 +198,5 @@ export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSu
 } {
   return { ...DEFAULTS, ...c }
 }
+
 

@@ -12,11 +12,14 @@ const keys = [
   'function installStepCardRegistrar',     // step.js
   "slots.inject('conversation.chat.node'", // step.js：委托 assistant-step 的注册
   'function makeThinkStepCard',            // step.js
+  'function officialTodoDock',             // todo.js
+  'function makeTodoTranslatedDock',        // todo.js
+  'function installTodoDock',              // todo.js
+  "slots.inject('conversation.input.dock'", // todo.js（接管看板）/ index.js（空注册器）
   'function isChatTabActive',              // dock.js
   'function makeInputDock',
   'function makeThinkSummaryView',         // views.js
   "slots.inject('settings.plugin.item'",   // index.js
-  "slots.inject('conversation.input.dock'", // index.js：注册器（step card 那步）
   "slots.inject('conversation.view'",
 ]
 const idx = keys.map((k) => s.indexOf(k))
@@ -27,3 +30,6 @@ if (missing.length > 0) console.log('缺少模块片段：' + missing.join(', ')
 else if (ordered) console.log('模块顺序正确 ✅')
 else console.log('顺序错误 ✗')
 process.exit(missing.length > 0 || !ordered ? 1 : 0)
+
+
+

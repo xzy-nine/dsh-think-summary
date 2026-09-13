@@ -8,7 +8,7 @@ import type { ThinkSummaryConfig } from './config.js'
  * 响应里，用来确认运行中的宿主究竟加载了哪一版代码（Host 模块被 ESM 缓存，
  * 补丁热重载只重建行、不重新 import 依赖，改 Host 代码必须重启 dsh）。
  */
-export const BUILD = '2026-09-13-refine-error-reporting'
+export const BUILD = '2026-09-13-todo-manual-translate'
 
 /** llm 服务的最小可用面（与 refine.ts 对齐，防御性类型）。 */
 interface LlmLike {
@@ -37,6 +37,14 @@ interface RefineRetryBody {
   all?: boolean
 }
 
+/** 任务看板翻译请求体（用户点按钮才发）。 */
+interface TodoTranslateBody {
+  /** 需要译文的条目原文；给什么翻什么。 */
+  contents?: unknown[]
+  /** 仅用于日志与路由兜底。 */
+  sessionId?: string
+}
+
 /**
  * M1/M4 RPC 双传输：
  *  - 发布版：webServer 路由 `/api/think-summary/state`（浏览器 fetch，响应式注册）。
@@ -54,6 +62,9 @@ interface RefineRetryBody {
  *    **再试**——把指定段（或某个 think / 整个会话里所有未精炼段）重新入队精炼。
  *    段原文存在 state 里（`source`）；重启前落盘的旧记录没有原文，会以
  *    `refused` 计数返回，视图页据此禁用按钮。
+ *  - `/api/think-summary/todo-translate`（POST，loopback-only）：任务看板的
+ *    **手动翻译**——请求体给哪些条目原文就翻哪些（不自动判断），结果按
+ *    `原文 → 中文` 返回，客户端拼成 `原文（中文）` 渲染。
  *  - 动态插件开发版：全局 harness.handle（host.call）
  */
 export function installRpc(
@@ -62,6 +73,7 @@ export function installRpc(
   getOptions?: () => ThinkSummaryConfig,
   refine?: RefineQueueLike | null,
   defaultModel?: () => { provider: string; model: string },
+  todoTranslate?: (contents: readonly unknown[], sessionId: string) => Promise<Record<string, string>>,
 ): void {
   const enabled = () => getOptions?.().enabled !== false
   // 模型目录缓存：供应商目录签名变化（注册/卸载）才重取，避免设置页每次打开重复查询
@@ -144,6 +156,25 @@ export function installRpc(
             queued++
           }
           writeJson(res, 200, { ok: true, queued, refused, matched: targets.length })
+        } catch (error) {
+          writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    })
+
+    webServer.register({
+      kind: 'exact',
+      path: '/api/think-summary/todo-translate',
+      handler: async (req: RouteReq, res: RouteRes) => {
+        if (!isLoopback(req)) return writeJson(res, 403, { ok: false, code: 'forbidden', message: 'loopback-only' })
+        if (!todoTranslate) return writeJson(res, 200, { ok: false, code: 'unavailable', message: '任务翻译不可用' })
+        try {
+          const body = await readJsonBody<TodoTranslateBody>(req)
+          const contents = Array.isArray(body?.contents) ? body.contents : []
+          const sid = typeof body?.sessionId === 'string' ? body.sessionId : ''
+          // 给什么翻什么：不在这里判断"哪些条目该翻"（由用户点按钮决定）
+          const translations = await todoTranslate(contents, sid)
+          writeJson(res, 200, { ok: true, translations })
         } catch (error) {
           writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
         }

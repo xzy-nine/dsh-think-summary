@@ -578,16 +578,15 @@ export class RefineQueue {
 }
 
 /**
- * 读一个摘要流并做统一校验（段精炼与整体摘要共用）：
+ * 读一个模型流并做**终态校验**（段精炼 / 整体摘要 / 任务翻译共用）：
  *  - 终态 `finish{kind:'error'|'aborted'}` 必须抛错——provider 失败不抛异常，
  *    只看 text-delta 会把它静默吞掉（段永远停在"待精炼"，实测踩过）
  *  - 无文本（含 max-tokens 把预算烧在推理上）必须抛错并写回原因
- *  - 归一化后为空、或不是中文，同样抛错（不让英文/小作文冒充"已精炼"）
  * @param stream - llm.stream 的 chunk 流。
  * @param where - `provider/model`，写进错误信息便于定位。
- * @returns 归一化后的摘要（保证非空且含中文）。
+ * @returns 原始文本（已 trim，保证非空）。
  */
-async function readSummaryStream(
+export async function collectStreamText(
   stream: AsyncIterable<{ type?: string; text?: string }>,
   where: string,
 ): Promise<string> {
@@ -621,6 +620,21 @@ async function readSummaryStream(
       + (finishKind === 'max-tokens' ? '：预算被推理耗尽，请调大「精炼预算」' : ''),
     )
   }
+  return trimmed
+}
+
+/**
+ * 读一个摘要流并做统一校验（在 {@link collectStreamText} 之上加摘要约束）：
+ *  - 归一化后为空、或不是中文，同样抛错（不让英文/小作文冒充"已精炼"）
+ * @param stream - llm.stream 的 chunk 流。
+ * @param where - `provider/model`，写进错误信息便于定位。
+ * @returns 归一化后的摘要（保证非空且含中文）。
+ */
+async function readSummaryStream(
+  stream: AsyncIterable<{ type?: string; text?: string }>,
+  where: string,
+): Promise<string> {
+  const trimmed = await collectStreamText(stream, where)
   const text = normalizeSummary(trimmed)
   if (text.length === 0) throw new Error(`${where} 未返回可用摘要（归一化后为空）`)
   if (!CJK_CHAR_RE.test(text)) throw new Error(`${where} 摘要不是中文：「${text}」`)

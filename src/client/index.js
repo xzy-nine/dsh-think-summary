@@ -56,14 +56,26 @@ export function apply(ctx) {
       makeThinkSummaryView(),
     ))
   })
-  // 4) 输入框上方的实时面板：**已按要求隐藏**（总结改到对话体内每步下方，
+  step('todo dock', () => {
+    // 4) 任务看板的中文补充：**只改渲染**——委托官方 TodoDock（id `'todo'`），
+    //    只把 `useProjection('todos')` 的结果拼成 `原文（中文）`；会话日志零改动，
+    //    不会影响模型后续执行任务时读到的计划。官方条目未就绪则挂空注册器等它。
+    const registrar = installTodoDock(ctx)
+    if (registrar !== null) {
+      ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
+        { name: 'conversation.input.dock', id: 'think-summary.todo-registrar', order: 0 },
+        registrar,
+      ))
+    }
+  })
+  // 5) 输入框上方的实时面板：**已按要求隐藏**（总结改到对话体内每步下方，
   //    面板与它重复）。保留 dock.js 源码以便随时恢复：重新加上下面这段即可。
   //    ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
   //      { name: 'conversation.input.dock', id: 'think-summary.dock', order: 1 },
   //      makeInputDock(),
   //    ))
   step('styles', () => {
-    // 5) 样式注入（放最后也最不能失败：设置卡/视图卡/每步卡片的布局都靠它）
+    // 6) 样式注入（放最后也最不能失败：设置卡/视图卡/每步卡片的布局都靠它）
     if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-thinksummary-css]')) {
       const style = document.createElement('style')
       style.dataset.dshThinksummaryCss = ''

@@ -12,17 +12,54 @@
  * `enabled`（插件总开关）不在此列——它渲染为卡片顶部的独立总开关。 */
 const FIELD_GROUPS = [
   {
-    caption: '检测与分段',
+    caption: '精炼模型',
     fields: [
-      { key: 'thinkThresholdTokens', label: '长思考阈值', kind: 'num', unit: 'tok', hint: '思考超过该长度判定为长思考并开始分段' },
-      { key: 'segmentMinTokens', label: '段最小窗口', kind: 'num', unit: 'tok', hint: '达到后可切（等待语义边界信号）' },
-      { key: 'segmentMaxTokens', label: '段硬上限', kind: 'num', unit: 'tok', hint: '到点强制切，保证缓冲有界' },
+      { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后用所选模型给每个分段写摘要' },
+      { key: 'refineProvider', label: '供应商', kind: 'provider', hint: 'auto = 跟随主请求供应商；或手动指定任一已注册供应商（可选用其他供应商的模型）' },
+      { key: 'refineModel', label: '模型', kind: 'model', hint: 'auto = 所选供应商目录中上下文窗口最小的可用模型；或从列表固定指定' },
+      { key: 'refineConcurrency', label: '并发', kind: 'num', unit: '', hint: '并行精炼数；本地模型建议 1–2' },
+      { key: 'refineTimeout', label: '超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死的任务超时放弃并释放并发位' },
     ],
   },
   {
-    caption: '小模型精炼',
+    caption: '分段',
     fields: [
-      { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后所有可精炼分段都用最小模型精炼摘要' },
+      { key: 'segmentMinTokens', label: '段最小窗口', kind: 'num', unit: 'tok', hint: '达到后才允许切段（等语义边界信号）' },
+      { key: 'segmentMaxTokens', label: '段硬上限', kind: 'num', unit: 'tok', hint: '到点强制切（回溯到句末/行末），保证缓冲有界' },
+    ],
+  },
+  {
+    caption: '提示词',
+    fields: [
+      { key: 'refinePrompt', label: '分段摘要', kind: 'area', hint: '第一遍：每个分段 → 一句中文第一人称动向；片段的包裹与"要求后置"由代码固定' },
+      { key: 'refineThinkPrompt', label: '整体摘要', kind: 'area', hint: '第二遍：把分段摘要合并成整次思考的一句话（≥2 段才跑）' },
+      { key: 'todoTranslatePrompt', label: '任务翻译', kind: 'area', hint: '看板上的「翻译为中文」按钮用它：请求给哪几条就翻哪几条，译成简短中文（每行一条、顺序与行数不变，客户端拼成"原文（中文）"）' },
+    ],
+  },
+  {
+    caption: '存储与清理',
+    fields: [
+      { key: 'persistEnabled', label: '持久化保存', kind: 'bool', hint: '保存思考总结到磁盘（~/.dsh/dsh-think-summary.json），重启 dsh 后仍可查看历史总结' },
+      { key: 'autoCleanArchived', label: '自动清理', kind: 'bool', hint: '定期清理已归档（非活跃）会话的思考总结，避免磁盘无限增长' },
+      { key: 'autoCleanArchivedDays', label: '归档保留天数', kind: 'num', unit: '天', hint: '会话归档（非活跃）超过该天数后自动清理其思考总结' },
+    ],
+  },
+  {
+    caption: '高级（一般不用动）',
+    fields: [
+      { key: 'thinkThresholdTokens', label: '长思考阈值', kind: 'num', unit: 'tok', hint: '0 = 不门控：任何思考都分段总结；调大则只在超长思考时产出（原作者默认 2000）' },
+      { key: 'refineMinTokens', label: '精炼最小段', kind: 'num', unit: 'tok', hint: '低于该值的段跳过精炼；0 = 每段都精炼' },
+      { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）；关思考的模型 512 足够，未关思考的推理型建议 ≥1024' },
+      { key: 'refineMaxInputTokens', label: '精炼输入预算', kind: 'num', unit: 'tok', hint: '喂给小模型的段文本预算（按下方裁剪策略裁剪后）' },
+      {
+        key: 'refineTrim', label: '精炼输入裁剪', kind: 'enum',
+        options: [
+          ['headtail', '头尾（保主题+结论，丢中段）'],
+          ['tail', '仅尾部（丢主题，中段完整）'],
+          ['full', '完整保留（不裁剪，信息最全）'],
+        ],
+        hint: '精炼输入预算内的裁剪策略；完整保留不裁剪但最耗 token',
+      },
       {
         key: 'codeBlockMode', label: '代码块处理', kind: 'enum',
         options: [
@@ -42,44 +79,13 @@ const FIELD_GROUPS = [
         hint: '忽略：表格内容不进内存、不精炼，总结卡片不显示表格痕迹',
       },
       {
-        key: 'refineTrim', label: '精炼输入裁剪', kind: 'enum',
-        options: [
-          ['headtail', '头尾（保主题+结论，丢中段）'],
-          ['tail', '仅尾部（丢主题，中段完整）'],
-          ['full', '完整保留（不裁剪，信息最全）'],
-        ],
-        hint: '精炼输入预算内的裁剪策略；完整保留不裁剪但最耗 token',
-      },
-      { key: 'refineMaxInputTokens', label: '精炼输入预算', kind: 'num', unit: 'tok', hint: '喂给小模型的段文本预算（按下方裁剪策略裁剪后）' },
-      { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）；关思考的模型 512 足够，未关思考的推理型模型建议 ≥1024' },
-      { key: 'refineMinTokens', label: '精炼最小段', kind: 'num', unit: 'tok', hint: '低于该值的段跳过精炼、保留启发式摘要；0（默认）= 每个段都精炼' },
-      { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
-      { key: 'refineTimeout', label: '精炼超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死任务超时放弃并释放并发位' },
-      { key: 'refineProvider', label: '精炼供应商', kind: 'provider', hint: 'auto（推荐）= 精炼时自动跟随主请求的供应商；或手动指定任一已注册供应商（可选用其他供应商的模型）' },
-      { key: 'refineModel', label: '精炼模型', kind: 'model', hint: 'auto（推荐）= 精炼时自动选用所选供应商的最小可用模型；或从列表固定指定' },
-      { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '第一遍（分段）发给模型的 system 提示词；片段包裹与"要求后置"由代码固定' },
-      { key: 'refineThinkPrompt', label: '整体摘要提示词', kind: 'area', hint: '第二遍：把分段摘要再喂一次，得到整次思考的一句话动向（常显，段列表默认折叠）' },
-    ],
-  },
-  {
-    caption: '主模型自产小结',
-    fields: [
-      {
-        key: 'selfSummary', label: '模式', kind: 'enum',
+        key: 'selfSummary', label: '主模型自产小结', kind: 'enum',
         options: [
           ['off', '关闭'],
           ['prompt', '注入提示词并捕获'],
         ],
-        hint: '向系统提示词注入小结指令，思考时模型输出【思考小结】标记，插件流内捕获直接展示（默认关：会改变主模型思考方式，需实测）',
+        hint: '向系统提示词注入小结指令，模型输出【思考小结】标记时流内捕获直接展示（会改变主模型思考方式）',
       },
-    ],
-  },
-  {
-    caption: '存储与清理',
-    fields: [
-      { key: 'persistEnabled', label: '持久化保存', kind: 'bool', hint: '保存思考总结到磁盘（~/.dsh/dsh-think-summary.json），重启 dsh 后仍可查看历史总结' },
-      { key: 'autoCleanArchived', label: '自动清理', kind: 'bool', hint: '定期清理已归档（非活跃）会话的思考总结，避免磁盘无限增长' },
-      { key: 'autoCleanArchivedDays', label: '归档保留天数', kind: 'num', unit: '天', hint: '会话归档（非活跃）超过该天数后自动清理其思考总结' },
     ],
   },
 ]

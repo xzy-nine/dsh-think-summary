@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 拼接顺序 = 依赖序（前序模块的 const/function 被后续模块使用）。 */
-const MODULES = ['constants.js', 'utils.js', 'styles.js', 'settings.js', 'step.js', 'dock.js', 'views.js', 'index.js']
+const MODULES = ['constants.js', 'utils.js', 'styles.js', 'settings.js', 'step.js', 'todo.js', 'dock.js', 'views.js', 'index.js']
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const all = MODULES.map((f) => readFileSync(join(root, 'src', 'client', f), 'utf8')).join('\n')
@@ -55,4 +55,5 @@ const out = banner + body + footer
 mkdirSync(join(root, 'lib'), { recursive: true })
 writeFileSync(join(root, 'lib', 'client.js'), out)
 console.log('[dsh-think-summary] wrote lib/client.js (%d bytes, exports: %s)', out.length, exportsLines.length > 0 ? exportsLines.map((l) => l.trim().replace('exports.', '')).join(', ') : '(none)')
+
 

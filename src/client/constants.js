@@ -9,3 +9,5 @@ const CLEAR_ARCHIVED_ROUTE = '/api/think-summary/clear-archived'
 const MODELS_ROUTE = '/api/think-summary/models'
 const PAUSE_ROUTE = '/api/think-summary/pause'
 const REFINE_ROUTE = '/api/think-summary/refine'
+const TODO_ROUTE = '/api/think-summary/todo-translate'
+

@@ -6,8 +6,15 @@ import { installSettingsRpc } from './host/settings-rpc.js'
 import { installFallback } from './host/fallback.js'
 import { installSelfSummaryPrompt } from './host/self-summary.js'
 import { installPersist } from './host/persist.js'
+import { createTodoTranslator } from './host/todo.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
-import { resolveConfig, DEFAULT_REFINE_PROMPT, DEFAULT_THINK_PROMPT, type ThinkSummaryConfig } from './host/config.js'
+import {
+  resolveConfig,
+  DEFAULT_REFINE_PROMPT,
+  DEFAULT_THINK_PROMPT,
+  DEFAULT_TODO_PROMPT,
+  type ThinkSummaryConfig,
+} from './host/config.js'
 import type { CtxLike, SettingsServiceLike } from './host/ctx.js'
 
 export const name = 'dsh-think-summary'
@@ -39,6 +46,8 @@ const Config = z.object({
   refinePrompt: z.string().default(DEFAULT_REFINE_PROMPT),
   /** 第二遍（整体摘要）的 system 提示词。 */
   refineThinkPrompt: z.string().default(DEFAULT_THINK_PROMPT),
+  /** 任务看板：看板上「翻译为中文」按钮用的 system 提示词（手动触发）。 */
+  todoTranslatePrompt: z.string().default(DEFAULT_TODO_PROMPT),
   refineConcurrency: z.number().default(3),
   refineTimeout: z.number().default(60),
   codeBlockMode: z.union([z.const('ignore'), z.const('keep-skip'), z.const('keep-refine')]).default('ignore'),
@@ -155,7 +164,8 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   const defaultModel = defaultModelOf
 
   installDetect(ctx, store, () => getConfig(), refine)
-  installRpc(ctx, store, () => getConfig(), refine, defaultModel)
+  const todoTranslate = createTodoTranslator(() => getConfig(), () => ctx.get('llm') as LlmLike | undefined, defaultModel)
+  installRpc(ctx, store, () => getConfig(), refine, defaultModel, (contents, sessionId) => todoTranslate.translate(contents, sessionId))
   installSettingsRpc(ctx)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 
@@ -199,4 +209,6 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
 }
 
 export { Config }
+
+
 

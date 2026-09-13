@@ -12,6 +12,7 @@
  */
 import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary } from '../lib/host/summarize/refine.js'
 import { decideRefine } from '../lib/host/summarize/pipeline.js'
+import { createTodoTranslator } from '../lib/host/todo.js'
 
 let failures = 0
 const check = (name, actual, expected) => {
@@ -159,6 +160,53 @@ check('整体摘要同样受中文硬校验',
     { type: 'finish', reason: { kind: 'stop' } },
   ]),
   { kind: 'think-failed', reason: 'ollma/qwen3.5:4b 摘要不是中文：「I am fixing the baseURL 404」' })
+
+// ── 7. 任务看板翻译：手动触发、给什么翻什么、按原文缓存 ──────────────────────
+/** 假 llm + 调用计数；译文按行对应请求里的条目顺序。 */
+function todoTranslator(lines, counter = { calls: 0 }) {
+  const t = createTodoTranslator(
+    () => ({ refineProvider: 'ollma', refineModel: 'qwen3.5:4b', refineOutputTokens: 512, todoTranslatePrompt: 'p' }),
+    () => ({
+      stream: () => {
+        counter.calls++
+        return (async function* () {
+          yield { type: 'text-delta', text: lines.join('\n') }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    }),
+    () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }),
+  )
+  return { t, counter }
+}
+
+const empty = todoTranslator(['不该被调用'])
+check('没有条目 → 不调模型', [await empty.t.translate([], 's'), empty.counter.calls], [{}, 0])
+
+const manual = todoTranslator(['修复 baseURL 的 404', '改善看板按钮'])
+check('给什么翻什么（不挑条目）',
+  await manual.t.translate(['Fix the baseURL 404', 'Improve the board button'], 's'),
+  { 'Fix the baseURL 404': '修复 baseURL 的 404', 'Improve the board button': '改善看板按钮' })
+
+check('同一条目再翻 → 命中缓存，不调模型',
+  [await manual.t.translate(['Fix the baseURL 404'], 's'), manual.counter.calls],
+  [{ 'Fix the baseURL 404': '修复 baseURL 的 404' }, 1])
+
+const filtered = todoTranslator(['只翻这条'])
+check('非字符串/空串被剔除、重复项只翻一次',
+  await filtered.t.translate(['', 42, 'Only this one', 'Only this one'], 's'),
+  { 'Only this one': '只翻这条' })
+
+const truncated = { calls: 0 }
+const many = todoTranslator(Array.from({ length: 60 }, (_, i) => `第${i}条`), truncated)
+const capped = await many.t.translate(Array.from({ length: 60 }, (_, i) => `item ${i}`), 's')
+check('单次条目数封顶（60 条请求 → 只翻 40 条）',
+  [Object.keys(capped).length, truncated.calls], [40, 1])
+
+const partial = todoTranslator(['只有一行译文'])
+check('模型少给译文 → 缺的条目就不出现在结果里',
+  await partial.t.translate(['First line', 'Second line'], 's'),
+  { 'First line': '只有一行译文' })
 
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

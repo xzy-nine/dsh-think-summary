@@ -149,3 +149,39 @@
    （监听 `internal/service` 在 webServer 出现时补注册）。
 5. **客户端 bundle 实时读取**：`/plugins/<包名>/client.js` 每请求读取 lib/client.js，
    改客户端代码后刷新浏览器即生效，无需重启；Host 半面改动需重启 dsh。
+
+## 7. 客户端槽位（0.1.5 实机踩坑）
+
+1. **apply 期间什么都不能等**。客户端插件 `apply` 跑在官方条目注册**之前**
+   （`slots.entries('…')` 返回 0 条），`timer` 服务还没挂载，浏览器全局定时器也不可用。
+   所以：先同步试一次；不成就往同一个槽位注册一个**渲染 null 的注册器组件**，
+   在它的 `React.useEffect` 里用 `setInterval` 轮询，拿到官方条目后完成接管。
+2. **优先级规则（keyed 和 list 槽位同一条）**：同一个 key/id 用**相同 priority**
+   再注册会被直接拒绝，报错原文要求换优先级：
+   `… already has an entry with id "todo" at priority 0 (registered by …) —
+   register at a different priority to shadow it (lowest renders)`。
+   **越低越先渲染**，接管官方条目用 `priority: -1000`（步骤卡 `assistant-step`、
+   看板 `todo` 都是这么接管的），并且注册时**保留官方的 `locale`**，否则拿不到 `t`。
+3. **委托渲染**：`slots.entries(name)` 能拿到官方的 `component` 与 `locale`；
+   以更低优先级重注册后，组件里 `React.createElement(official, props)` 原样委托。
+   接管成功后官方条目**仍留在 `entries()` 里**（只是 `active: false`），委托路径因此一直有效。
+4. **注册要 try/catch 兜住**：注册抛异常会把整个注册器条目打成失效，并连带该步之后
+   的步骤（样式注入等）不再执行——`index.js` 里每一步都单独包了 `step(label, run)`。
+5. **会话格式 v3：`assistant/chunk` 事件已不存在**。实时思考改从
+   `assistant/message.data.stream` 读 reasoning 增量；兜底路径读
+   `data.message.content` 里的 `reasoning` 块；`data.message.id` 可作匹配键
+   （比 `turn+step` 更稳）。
+6. **看板中文补充只改渲染**：委托官方 `TodoDock`，只把传进去的 `props.useProjection`
+   包一层，让 `'todos'` 返回 `原文（中文）`；**不写 `session.append`**，
+   因此模型后续读到的计划仍是原文，不受影响。
+   翻译由看板下方的**按钮手动触发**（`POST /api/think-summary/todo-translate`）：
+   宿主不监听 `todo/write`、不判断哪些条目该翻，请求里给哪几条就翻哪几条，
+   结果按 `原文 → 中文` 内容缓存（与会话无关，重复点击不再调模型）。
+7. **`fetch` 的可用性分两种**：动态 Cordis 插件沙箱里没有 `fetch`（只能走 Host RPC）；
+   而安装版客户端 bundle（`/plugins/<包>/client.js`）是普通浏览器环境，`fetch` 正常可用。
+8. **把手动按钮做进官方卡片里**：官方 `TodoDock` 不能接收 children，所以外层套一个
+   `.ts-todo-wrap`（复刻官方 `.root` 的宽度公式/圆角/边框/底色）画卡框，再用
+   `.ts-todo-wrap > section`（官方根节点是 `<section data-testid="todo-panel">`，
+   这是唯一的非 hash 选择器钩子）把官方面板自己的边框/圆角/底色去掉，按钮作为
+   页脚行贴底 → 视觉上是同一张卡片。官方渲染 `null`（无待办）时不要输出外层 div，
+   否则会留一个空卡框。
