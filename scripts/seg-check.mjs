@@ -20,7 +20,7 @@ const ok = (name, cond, extra = '') => {
 /** 用流式 Segmenter 喂入若干增量块，收集切出的段。 */
 function streamSegments(text, options, sink = null, chunkSize = 7) {
   const out = []
-  const seg = new Segmenter(options, (t, tokens, meta) => out.push({ text: t, tokens, meta }))
+  const seg = new Segmenter(options, (t, tokens, meta, isTail, rawTokens) => out.push({ text: t, tokens, meta, isTail, rawTokens }))
   if (sink) sink(seg)
   for (let i = 0; i < text.length; i += chunkSize) seg.feed(text.slice(i, i + chunkSize))
   seg.flush()
@@ -98,10 +98,11 @@ ok('流式：长句被切成 ≥2 段', live5.length >= 2)
 const endsOk = live5.every((s) => s.text.length === 0 || /[。！？]/.test(s.text.slice(-1)))
 ok('流式：每段以句末标点收尾（句末回溯）', endsOk, JSON.stringify(live5.map((s) => s.text.slice(-2))))
 
-// ---------- 6. MIN_SEGMENT_FLOOR：小尾巴不出段 ----------
-console.log('\n[6] flush 小尾巴下限')
+// ---------- 6. MIN_SEGMENT_FLOOR = 0：任何短尾巴都出段（本项目要求短思考也要总结） ----------
+console.log('\n[6] flush 小尾巴（下限已设为 0，不再丢弃）')
 const tiny = streamSegments('短尾巴文本。', { segmentMinTokens: 40, segmentMaxTokens: 400 })
-ok('流式：低于下限的尾巴不出段', tiny.length === 0)
+ok('流式：短尾巴也出段', tiny.length === 1, JSON.stringify(tiny.map((s) => s.text)))
+ok('流式：短尾巴确实是被精炼门控放行的尾巴段', tiny[0] !== undefined && tiny[0].isTail === true)
 
 // ---------- 7. ignore 模式：代码/表格内容不写缓冲，产出元信息段 ----------
 console.log('\n[7] ignore 模式（默认）：内容不写缓冲 + 元信息段')

@@ -58,16 +58,17 @@ export interface RefineDecision {
 
 /**
  * 精炼决策（实时 stream.ts 与兜底 fallback.ts 共用）：
- *  - 非末尾小段（低于段最小窗口）不调小模型精炼：保留启发式摘要，省 token，记原因；
- *  - 末尾尾巴段（isTail，思考结束的结论尾巴）即使 < min 也精炼。
+ *  - `refineMinTokens`（默认 0）= 低于该值的**非末尾**段跳过精炼、保留启发式摘要；
+ *    默认 0 即**每个段都精炼**（本地模型成本可忽略，也避免长启发式摘要占屏）。
+ *  - 末尾尾巴段（isTail，思考结束的结论尾巴）无论多小都精炼。
  */
 export function decideRefine(
-  options: { segmentMinTokens?: number },
+  options: { refineMinTokens?: number },
   tokens: number,
   isTail?: boolean,
 ): RefineDecision {
-  const minRefine = options.segmentMinTokens ?? 1500
-  const tooSmall = tokens < minRefine && !isTail
+  const minRefine = typeof options.refineMinTokens === 'number' ? options.refineMinTokens : 0
+  const tooSmall = minRefine > 0 && tokens < minRefine && !isTail
   return {
     minRefine,
     tooSmall,

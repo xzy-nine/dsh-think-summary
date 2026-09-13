@@ -13,7 +13,18 @@ export const name = 'dsh-think-summary'
 export const inject = ['slots']
 
 export function apply(ctx) {
-  try {
+  // 每一步各自容错：任何一步失败只丢那一步，绝不让后面的注册（尤其 CSS 注入）被跳过。
+  // （实测教训：对话内卡片那段用了不存在的 ctx.timeout，抛错被外层 catch 吞掉，
+  //   后面 3/4/5 步全没执行 —— 设置卡片没样式、视图页与 dock 也消失。）
+  const step = (label, run) => {
+    try {
+      run()
+    } catch (error) {
+      console.error('[dsh-think-summary] client apply step failed (' + label + '):', error)
+    }
+  }
+
+  step('settings card', () => {
     // 1) 设置卡片（官方插件配置区，直连自建设置桥）。
     //    rc.7 起 settings.plugin.item 是 keyed 槽位：注册必须传 key（= 设置命名空间），
     //    旧的 id/order/label 写法会在声明时抛 keyed slot requires options.key。
@@ -22,34 +33,42 @@ export function apply(ctx) {
       { name: 'settings.plugin.item', key: 'think-summary' },
       makeSettingsCard(scope),
     ))
-    // 2) 聊天流内：turn 末尾的思考总结条（turn 级槽位，显示该 turn 全部思考分组）
-    //    select 返回值成为组件的 matched prop：传 TurnLocation 对象 + seq
-    ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register(
-      {
-        name: 'conversation.chat.turnTail',
-        select: (owner) => (owner && owner.turn && typeof owner.turn.turn === 'number' ? { turn: owner.turn, seq: owner.seq } : null),
-      },
-      makeThinkTail(),
-    ))
+  })
+  step('step card', () => {
+    // 2) 对话体内每步的总结卡：**委托官方 assistant-step**（官方内容照常渲染，
+    //    卡片追加在其下方）。对话体内没有"思考行下方"的槽位，官方内联思考渲染在
+    //    AssistantMarkdown 里，所以只能以同一 key 委托官方组件再追加。
+    //    官方条目晚于本插件注册（实测：apply 期间 entries() 是 0 条、timer 未挂载、
+    //    全局定时器不可用）→ 拿不到就挂一个空渲染的注册器到 input.dock，
+    //    在它的 React effect 里轮询等待（effect 内全局定时器可用）。
+    const registrar = installStepCardRegistrar(ctx, makeThinkStepCard)
+    if (registrar !== null) {
+      ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
+        { name: 'conversation.input.dock', id: 'think-summary.registrar', order: 0 },
+        registrar,
+      ))
+    }
+  })
+  step('summary view', () => {
     // 3) "思考总结"视图选项卡：全会话思考总结（conversation.view 条目）
     ctx.slots.inject('conversation.view', () => ctx.slots.register(
       { name: 'conversation.view', id: 'think-summary', order: 20, label: '思考总结' },
       makeThinkSummaryView(),
     ))
-    // 4) 输入框上方实时面板（配合输入框样式；只显示当前思考，且仅在"对话"视图）
-    ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
-      { name: 'conversation.input.dock', id: 'think-summary.dock', order: 1 },
-      makeInputDock(),
-    ))
-    // 5) 样式注入
+  })
+  // 4) 输入框上方的实时面板：**已按要求隐藏**（总结改到对话体内每步下方，
+  //    面板与它重复）。保留 dock.js 源码以便随时恢复：重新加上下面这段即可。
+  //    ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
+  //      { name: 'conversation.input.dock', id: 'think-summary.dock', order: 1 },
+  //      makeInputDock(),
+  //    ))
+  step('styles', () => {
+    // 5) 样式注入（放最后也最不能失败：设置卡/视图卡/每步卡片的布局都靠它）
     if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-thinksummary-css]')) {
       const style = document.createElement('style')
       style.dataset.dshThinksummaryCss = ''
       style.textContent = PANEL_CSS
       document.head.appendChild(style)
     }
-  } catch (error) {
-    // web shell 会因 apply 抛错而启动失败：外部插件必须吞掉
-    console.error('[dsh-think-summary] client apply failed:', error)
-  }
+  })
 }

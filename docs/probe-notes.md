@@ -35,6 +35,47 @@
    （无 contextWindow 字段，auto 解析按目录顺序取第一个）。
 7. 错误隔离：坏 provider 不抛异常（终态 error chunk），队列吞掉即可。
 
+### 0.1.5-rc.2 复核（供应商目录与设置服务）
+
+8. `llm.listProviders()` 返回**已注册** provider 路由（`{ id, name }`，
+   `listConfigurableProviders()` 另列声明但未激活者）；本机实测
+   `[{ id: 'deepseek-official', name: 'DeepSeek' }]`，`/api/think-summary/models`
+   即以此为“可手动选择的其他供应商”列表。
+9. 跨供应商精炼：`llm.stream({ provider, model, ... })` 的 provider 由选项决定，
+   与主请求 provider 无关；精炼调用不带 `sessionId`/`purpose`，因此不会被本插件的
+   旁路流过滤（`filterNonAgentLoop`）二次接管。
+10. `settingsController.describe()` 返回**全部已注册命名空间**（不再有第三方
+    白名单），设置卡片因此能在“设置 → 插件配置”中被派发；`settings` 服务的
+    `installSection(owner, ns, schema, entry, hooks)` 是方法而非顶层导出，且
+    `@deepseek-ai/dsh-settings` 不再导出 `installSettingsSection` /
+    `settingsNamespace`——外部插件改经 `ctx.get('settings')` 调用。
+11. **provider 侧失败不抛异常**：适配器/鉴权/HTTP 失败以终态 chunk
+    `finish{reason:{kind:'error'|'aborted', failure:{code,status,message}}}` 收尾
+    （实测 ollama baseURL 写成 `/api/chat` 时 404 即此形态）。只累计 `text-delta`
+    会把这类失败静默吞掉——段永远停在“待精炼”。精炼必须检查终态 chunk。
+12. **补丁热重载不重新 import Host 模块**：改 `profiles/web/cordis.patch.yml`
+    会重载插件行（进程内状态重建），但 `lib/*.js` 仍命中 ESM 缓存——实测加构建标记
+    后 `/api/think-summary/state` 仍返回旧值。**Host 代码改动必须重启 dsh web**；
+    只有 `lib/client.js` 由浏览器侧重新拉取。
+13. 小模型先推理且推理量很大（`qwen3.5:4b` 单次精炼实测 370 个 reasoning-delta、
+    15 个 text-delta；512 token 预算够用，1024 更稳）；预算耗尽时是
+    `finish{kind:'max-tokens'}` 且**无任何 text-delta**，需按“无文本”单独上报。
+14. **关思考只能由 provider 侧决定**（实测，Ollama `qwen3.5:4b`）：
+
+    | 手段 | 结果 |
+    |---|---|
+    | `llm.stream` 不带 `reasoningEffort`，provider 未声明档位 | 思考 11479 字符，35.2s |
+    | `/v1/chat/completions` 带 `reasoning_effort: "none"` | **思考 0，0.39s** |
+    | `enable_thinking: false` | 被 Ollama 忽略，31.7s |
+    | `think: false` 打到 `/v1` | 被忽略（那是 `/api/chat` 原生端字段），21.8s |
+    | 提示词加 `/no_think` | 1118 → 794 个 reasoning 增量，未真正关闭 |
+
+    `reasoningEffort` 走不通的原因：`resolveCallConfig` 对未声明档位的路由直接拒绝
+    （`does not support reasoning effort "none"`）。正解是 provider 声明
+    `compat.supportsReasoningEffort: true` + 模型 `reasoningEfforts: { off: none, ... }`；
+    pi-ai 的 openai 分支把 `levels.off` 的线格式写进 `params.reasoning_effort`，
+    于是**不传 effort 的调用（插件精炼）默认即 `none`**，单次精炼从 >60s 超时降到 ~7s。
+
 ## 1. StreamChunk 形状（llm/stream 产出）
 
 流是**块结构**：`block-start` → N 个 delta → `block-end`，结尾 `usage` + `finish`。

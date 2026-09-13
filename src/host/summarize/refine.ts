@@ -1,14 +1,30 @@
 /**
  * M3 小模型精炼（design.md §4.3.2）：
  *  - 门控：仅 refineEnabled 总开关；段 < 段最小窗口不精炼（省 token）
- *  - 模型来源：复用主请求的 provider，`llm.listModels` 选最小可用模型（'auto'）
+ *  - provider 来源：`refineProvider`（'auto' = 复用主请求 provider；或显式指定
+ *    任一已注册 provider —— 可手动选用其他供应商的模型）
+ *  - 模型来源：所选 provider 的 `llm.listModels` 中上下文窗口最小的可用模型
+ *    （refineModel='auto'），或显式模型 id
  *  - 输入硬截断：只喂段尾部 refineMaxInputTokens；输出上限 refineOutputTokens
  *  - 独立队列，并发 1；绝不阻塞主请求（fire-and-forget）
  *  - 异常/中止：错误隔离回退启发式（保留原摘要）；按会话取消未完成任务
  *  - 提示词：默认固定短模板，设置页可修改（refinePrompt）
  */
 import { countRaw, estimateTokens } from '../detect.js'
-import { DEFAULT_REFINE_PROMPT } from '../config.js'
+import {
+  DEFAULT_REFINE_PROMPT,
+  DEFAULT_THINK_PROMPT,
+  REFINE_USER_TEMPLATE,
+  THINK_USER_TEMPLATE,
+} from '../config.js'
+
+/** 精炼 provider/模型解析结果。 */
+export interface RefineRoute {
+  /** 实际使用的 provider；'' = 无法解析（不发起调用）。 */
+  provider: string
+  /** 实际使用的 model；'' = 无法解析（不发起调用）。 */
+  model: string
+}
 
 export interface RefineOptions {
   enabled?: boolean
@@ -19,10 +35,14 @@ export interface RefineOptions {
    * 预算不足会卡在 max-tokens 不出答案）。答案展示时再截断到 ~60 token。
    */
   outputTokens?: number
-  /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
+  /** 'auto' = 跟随主请求 provider；或显式 provider id（可跨供应商）。 */
+  provider?: string
+  /** 'auto' = 所选 provider 的最小可用模型；或显式模型 id。 */
   model?: string
   /** 精炼 system 提示词（设置页可修改；缺省用默认模板）。 */
   refinePrompt?: string
+  /** 整体（整次思考）摘要的 system 提示词（第二遍；缺省用默认模板）。 */
+  thinkPrompt?: string
   /** 并行精炼数（并发执行，任务之间互不打断）。 */
   refineConcurrency?: number
   /** 单任务超时（秒）：卡死任务超时放弃并释放并发位，防排队任务永不执行。 */
@@ -42,7 +62,7 @@ export interface RefineTask {
   segmentIndex: number
   /** 段全文（内部裁剪尾部喂入）。 */
   text: string
-  /** 主请求的 provider（与主流同 provider）。 */
+  /** 主请求的 provider（refineProvider='auto' 时用它；也是兜底归属）。 */
   provider: string
   /** 主请求的 model（auto 解析失败时的兜底）。 */
   fallbackModel: string
@@ -64,12 +84,76 @@ export interface RefineFail {
   (sessionId: string, thinkId: string, segmentIndex: number, reason: string): void
 }
 
-/** 展示截断：精炼结果最多保留 ~60 token（约 240 字符）。 */
-const DISPLAY_MAX_CHARS = 240
+/** 整体摘要结果回调（第二遍：段摘要 → 整次思考的一句话动向）。 */
+export interface RefineApplyThink {
+  (
+    sessionId: string,
+    thinkId: string,
+    summary: string,
+    tokens: { input: number; output: number },
+  ): void
+}
+
+/** 整体摘要失败回调（写回 think 上的原因，UI 可显示）。 */
+export interface RefineFailThink {
+  (sessionId: string, thinkId: string, reason: string): void
+}
+
+/** 整体摘要任务（防抖后入队）。 */
+interface ThinkTask {
+  sessionId: string
+  thinkId: string
+  provider: string
+  fallbackModel: string
+  /** 分段摘要拼接后的输入。 */
+  text: string
+}
+
+/** 整体摘要防抖窗口（毫秒）：长思考的段摘要陆续产出，只保留最后一次。 */
+const THINK_DEBOUNCE_MS = 1200
+
+/** 展示截断：精炼结果最多保留 60 字符（提示词要求 ≤30 字，留一点余量）。 */
+const DISPLAY_MAX_CHARS = 60
+
+/** 中日韩表意文字：摘要语言校验用（要求中文输出）。 */
+const CJK_CHAR_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/
+
+/** markdown 外壳：列表符/引用/标题/编号。 */
+const MD_PREFIX_RE = /^(?:[#>\-*+•·]\s*)+/
+const NUM_PREFIX_RE = /^\d+\s*[.、)]\s*/
+/** 前导词（"总结："/"答案："等），模型爱加而这些不属于摘要本身。 */
+const LEAD_WORD_RE = /^(?:思考)?(?:动向|总结|摘要|答案|结论|要点|核心)\s*[:：]\s*/
+/** 包裹引号/反引号。 */
+const WRAP_RE = /^[`"'“”‘’]+|[`"'“”‘’]+$/g
+/** 第一句（到句末标点为止；上限防跑飞）。 */
+const FIRST_SENTENCE_RE = /^[^。！？!?；;\n]{1,200}[。！？!?]?/
+
+/**
+ * 把模型回复归一化成一条可展示的摘要：
+ *  - 只取第一行 → 去 markdown 前缀/编号/引号/"总结："类前导词 → 只取第一句
+ *  - 压缩空白；超过 DISPLAY_MAX_CHARS 截断加省略号
+ * 目的是让"已精炼"标记名副其实：存下来的必须是一条短摘要，而不是小作文。
+ * @param raw - 模型返回的原始文本（已 trim）。
+ * @returns 归一化后的摘要；无可用内容时返回空串（调用方按失败处理）。
+ */
+export function normalizeSummary(raw: string): string {
+  const firstLine = raw.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? ''
+  let s = firstLine.replace(MD_PREFIX_RE, '').replace(NUM_PREFIX_RE, '')
+  s = s.replace(LEAD_WORD_RE, '')
+  s = s.replace(WRAP_RE, '').trim()
+  const sentence = s.match(FIRST_SENTENCE_RE)
+  if (sentence !== null) s = sentence[0]
+  s = s.replace(/\s+/g, ' ').replace(/\s*([，。；：、])/g, '$1').trim()
+  s = s.replace(WRAP_RE, '').trim()
+  if (s.length > DISPLAY_MAX_CHARS) s = s.slice(0, DISPLAY_MAX_CHARS) + '…'
+  return s
+}
 
 /** llm 服务的最小可用面（防御性类型，不依赖完整契约）。 */
 export interface LlmLike {
   stream(options: Record<string, unknown>): AsyncIterable<{ type?: string; text?: string }>
+  /** 已注册 provider 路由目录（0.1.5 存在；旧宿主缺失时回退单 provider 行为）。 */
+  listProviders?(): Array<{ id?: string; name?: string }>
   listModels?(provider: string): Promise<Array<Record<string, unknown>>>
   /** rc.7 精确模型元数据查询：返回含 context.contextWindow 的解析信息。 */
   resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): Promise<Record<string, unknown>>
@@ -121,22 +205,33 @@ function modelContextWindow(m: Record<string, unknown>): number | undefined {
   return context?.contextWindow ?? direct
 }
 
+/** 已注册 provider id 列表（llm.listProviders；旧宿主无该方法时为空）。 */
+export function listProviderIds(llm: LlmLike): string[] {
+  try {
+    const raw = typeof llm.listProviders === 'function' ? llm.listProviders() : []
+    return (Array.isArray(raw) ? raw : [])
+      .map((p) => (p && typeof p.id === 'string' && p.id.length > 0 ? p.id : undefined))
+      .filter((x): x is string => x !== undefined)
+  } catch {
+    return [] // 目录不可用：调用方按"无从校验"处理，仍按任务 provider 走
+  }
+}
+
 /**
- * 'auto' 解析：provider 目录里上下文窗口最小的模型；失败回退主模型。
+ * 'auto' 解析：provider 目录里上下文窗口最小的模型；失败返回 ''。
  * rc.7 起 listModels 返回目录不再带 contextWindow，改为逐个
  * llm.resolveModelInfo(provider, model) 精确查询（返回 context.contextWindow）
  * 打分；宿主无 resolveModelInfo（旧版）时回退 listModels 字段启发式。
+ *
+ * 不跨 provider 兜底：调用方在 provider 与任务 provider 相同时才可用 fallbackModel。
  */
-export async function resolveModel(
-  llm: LlmLike,
-  provider: string,
-  fallback: string,
-): Promise<string> {
+export async function resolveModel(llm: LlmLike, provider: string): Promise<string> {
+  if (!provider) return ''
   try {
     const models = typeof llm.listModels === 'function' ? await llm.listModels(provider) : []
     const list = Array.isArray(models) ? models : []
     const ids = list.map((m) => (m && typeof m.id === 'string' ? (m.id as string) : undefined)).filter((x): x is string => Boolean(x))
-    if (ids.length === 0) return fallback
+    if (ids.length === 0) return ''
 
     // rc.7：resolveModelInfo 精确查询 context.contextWindow（N+1，候选少可接受）
     if (typeof llm.resolveModelInfo === 'function') {
@@ -153,7 +248,7 @@ export async function resolveModel(
       }
       if (best !== undefined) return best.id
       // 全部查询失败：回退目录顺序第一个
-      return ids[0] ?? fallback
+      return ids[0] ?? ''
     }
 
     // 旧版回退：listModels 字段启发式
@@ -163,9 +258,50 @@ export async function resolveModel(
       .sort((a, b) => a.score - b.score)
     if (scored[0]) return scored[0].id
   } catch {
-    /* 目录不可用时回退主模型 */
+    /* 目录不可用时由调用方决定是否回退 */
   }
-  return fallback
+  return ''
+}
+
+/**
+ * 解析一次精炼调用的 provider + model（设置页 provider/model 两个下拉的运行时口径）：
+ *  - provider：refineProvider 显式指定且仍已注册 → 用它（可跨供应商）；
+ *    否则（'auto'、未注册、旧宿主无目录）→ 任务所属主请求 provider；
+ *    显式 provider 已消失时回退任务 provider，避免整段精炼失败。
+ *  - model：显式 refineModel 直接用；否则按 provider 目录选最小可用模型，
+ *    目录不可用且 provider 与任务 provider 一致时回退任务模型。
+ */
+export async function resolveRefineRoute(
+  llm: LlmLike,
+  options: { provider?: string; model?: string },
+  task: RefineTask,
+): Promise<{ route: RefineRoute; error?: string }> {
+  const configured = typeof options.provider === 'string' ? options.provider.trim() : ''
+  const ids = listProviderIds(llm)
+  let provider = task.provider
+  let error: string | undefined
+  if (configured.length > 0 && configured !== 'auto') {
+    if (ids.length === 0 || ids.includes(configured)) {
+      provider = configured
+    } else {
+      error = `精炼 provider「${configured}」未注册，已回退主请求 provider「${task.provider || '未知'}」`
+    }
+  }
+
+  const model = typeof options.model === 'string' ? options.model.trim() : ''
+  if (model.length > 0 && model !== 'auto') return { route: { provider, model }, error }
+
+  const picked = await resolveModel(llm, provider)
+  if (picked.length > 0) return { route: { provider, model: picked }, error }
+  // 目录不可用：仅当 provider 就是任务 provider 时才可用任务模型（跨 provider 不可用）
+  const fallback = provider === task.provider ? task.fallbackModel : ''
+  if (fallback.length > 0) return { route: { provider, model: fallback }, error }
+  return {
+    route: { provider: '', model: '' },
+    error: error
+      ? `${error}；且「${provider || '未知'}」无可用模型`
+      : `provider「${provider || '未知'}」无可用模型（模型目录不可用）`,
+  }
 }
 
 /**
@@ -175,25 +311,35 @@ export async function resolveModel(
  *  - **不打断**：任务一旦入队就执行到底（不再按 think 取消/中止）——
  *    新思考/后续任务不会影响已完成思考的在途精炼（修复"部分段不精炼"）
  *  - 错误隔离：单任务失败只记日志，启发式摘要保留，不影响其他任务
+ *  - 两遍：段摘要（第一遍）+ 整体摘要（第二遍，把段摘要再喂一次，防抖合并）
  */
 export class RefineQueue {
   private queue: RefineTask[] = []
+  private thinkQueue: ThinkTask[] = []
+  /** 每个 think 一个防抖定时器（键：sessionId\u0000thinkId）。 */
+  private thinkPending = new Map<string, ReturnType<typeof setTimeout>>()
   private running = 0
   private readonly getOptions: () => RefineOptions
   private readonly getLlm: () => LlmLike | undefined
   private readonly apply: RefineApply
   private readonly onFail?: RefineFail
+  private readonly applyThink?: RefineApplyThink
+  private readonly onThinkFail?: RefineFailThink
 
   constructor(
     getOptions: () => RefineOptions,
     getLlm: () => LlmLike | undefined,
     apply: RefineApply,
     onFail?: RefineFail,
+    applyThink?: RefineApplyThink,
+    onThinkFail?: RefineFailThink,
   ) {
     this.getOptions = getOptions
     this.getLlm = getLlm
     this.apply = apply
     this.onFail = onFail
+    this.applyThink = applyThink
+    this.onThinkFail = onThinkFail
   }
 
   /** 门控入队（读实时配置）：精炼开关开（段大小/代码跳过由调用方决定）。 */
@@ -205,6 +351,45 @@ export class RefineQueue {
     return true
   }
 
+  /**
+   * 整体（整次思考）摘要：把该 think 的分段摘要再喂一次模型，得到一句覆盖整体的动向。
+   *
+   * 防抖：同一次思考的段摘要会随精炼陆续产出，1.2s 内的多次调用只保留最后一次
+   * （每次都用最新的完整段摘要列表），避免长思考打出十几次整体摘要请求。
+   *
+   * @param input - 会话/think 标识、段摘要列表、路由兜底信息。
+   * @returns 是否已排入防抖（`false` = 精炼关闭或没有可用摘要）。
+   */
+  enqueueThink(input: {
+    sessionId: string
+    thinkId: string
+    provider: string
+    fallbackModel: string
+    segments: readonly string[]
+  }): boolean {
+    const o = this.getOptions()
+    if (o.enabled === false || !this.applyThink || !this.onThinkFail) return false
+    const text = input.segments
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .join('；')
+    if (text.length === 0) return false
+    const key = `${input.sessionId}\u0000${input.thinkId}`
+    const pending = this.thinkPending.get(key)
+    if (pending !== undefined) clearTimeout(pending)
+    const timer = setTimeout(() => {
+      this.thinkPending.delete(key)
+      this.thinkQueue.push({ ...input, text })
+      this.pump()
+    }, THINK_DEBOUNCE_MS)
+    this.thinkPending.set(key, timer)
+    return true
+  }
+
+  get pendingThink(): number {
+    return this.thinkQueue.length
+  }
+
   /** 并发水位：有空位就取出任务并行执行；任务结束让出空位并补位。 */
   private pump(): void {
     const cap = Math.max(1, this.getOptions().refineConcurrency ?? 3)
@@ -213,6 +398,15 @@ export class RefineQueue {
       if (!task) break
       this.running++
       void this.runOne(task).finally(() => {
+        this.running = Math.max(0, this.running - 1)
+        this.pump()
+      })
+    }
+    while (this.running < cap && this.thinkQueue.length > 0) {
+      const task = this.thinkQueue.shift()
+      if (!task) break
+      this.running++
+      void this.runThink(task).finally(() => {
         this.running = Math.max(0, this.running - 1)
         this.pump()
       })
@@ -229,18 +423,27 @@ export class RefineQueue {
     if (!llm || typeof llm.stream !== 'function') {
       // eslint-disable-next-line no-console
       console.error('[dsh-think-summary] refine skipped: llm service unavailable', task.sessionId, task.thinkId, task.segmentIndex)
+      // 同样写回原因：否则 UI 只会显示"待精炼"，看不出是宿主能力缺失
+      this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, 'llm 服务不可用（宿主未挂载）')
       return // 启发式保留
     }
     try {
-      const model =
-        o.model && o.model !== 'auto'
-          ? o.model
-          : await resolveModel(llm, task.provider, task.fallbackModel)
+      // provider/model 解析：refineProvider='auto' 跟随主请求 provider，
+      // 显式 provider 可跨供应商（设置页手动选择）
+      const { route, error } = await resolveRefineRoute(llm, { provider: o.provider, model: o.model }, task)
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.warn('[dsh-think-summary] refine route degraded:', error)
+      }
+      if (!route.provider || !route.model) {
+        this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, error ?? '精炼模型不可用')
+        return
+      }
       // 超时兜底：任务卡死（llm 永不返回）时不占死并发位——超时放弃该任务
       // 并释放空位，后续排队任务继续（否则并发位被卡死任务占满，排队的段永不精炼）
       const timeoutMs = (o.refineTimeout ?? 60) * 1000
       const res = await Promise.race([
-        this.runRefine(llm, task, model, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024),
+        this.runRefine(llm, task, route, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024),
         new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
         }),
@@ -271,7 +474,7 @@ export class RefineQueue {
   private async runRefine(
     llm: LlmLike,
     task: RefineTask,
-    model: string,
+    route: RefineRoute,
     maxInputTokens: number,
     outputTokens: number,
   ): Promise<{ text: string; inputTokens: number }> {
@@ -285,24 +488,141 @@ export class RefineQueue {
           ? task.text
           : headTailTrim(task.text, maxInputTokens)
     const stream = llm.stream({
-      provider: task.provider,
-      model,
+      provider: route.provider,
+      model: route.model,
       maxTokens: outputTokens,
+      // 摘要任务要稳定：不要采样发散（温度 0）
+      temperature: 0,
       system: this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
       messages: [
         {
           role: 'user',
-          content: [{ type: 'text', text: inputText }],
+          // 片段用分隔符包住、要求写在片段之后：只发原文会让模型"接着想"而不是概括
+          content: [{ type: 'text', text: REFINE_USER_TEMPLATE.replace('{text}', inputText) }],
         },
       ],
     })
-    let out = ''
-    for await (const chunk of stream) {
-      const c = chunk
-      if (c && c.type === 'text-delta' && typeof c.text === 'string') out += c.text
-    }
-    const trimmed = out.trim()
-    const text = trimmed.length > DISPLAY_MAX_CHARS ? trimmed.slice(0, DISPLAY_MAX_CHARS) + '…' : trimmed
+    const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }
+
+  /**
+   * 第二遍：整体摘要。把该 think 的分段摘要合并成一句覆盖整次思考的动向。
+   * 输入是**摘要们**（不是思考原文），所以很小，直接用同样的裁剪兜底。
+   */
+  private async runThinkRefine(
+    llm: LlmLike,
+    task: ThinkTask,
+    route: RefineRoute,
+    maxInputTokens: number,
+    outputTokens: number,
+  ): Promise<{ text: string; inputTokens: number }> {
+    const inputText = headTailTrim(task.text, maxInputTokens)
+    const stream = llm.stream({
+      provider: route.provider,
+      model: route.model,
+      maxTokens: outputTokens,
+      temperature: 0,
+      system: this.getOptions().thinkPrompt ?? DEFAULT_THINK_PROMPT,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: THINK_USER_TEMPLATE.replace('{text}', inputText) }] },
+      ],
+    })
+    const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
+    return { text, inputTokens: estimateTokens(inputText) }
+  }
+
+  /** 整体摘要任务：路由解析 + 超时 + 错误隔离（与段精炼同口径）。 */
+  private async runThink(task: ThinkTask): Promise<void> {
+    const o = this.getOptions()
+    const llm = this.getLlm()
+    if (!llm || typeof llm.stream !== 'function') return
+    const routeTask: RefineTask = {
+      sessionId: task.sessionId,
+      thinkId: task.thinkId,
+      segmentIndex: -1,
+      text: task.text,
+      provider: task.provider,
+      fallbackModel: task.fallbackModel,
+    }
+    try {
+      const { route, error } = await resolveRefineRoute(llm, { provider: o.provider, model: o.model }, routeTask)
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.warn('[dsh-think-summary] think route degraded:', error)
+      }
+      if (!route.provider || !route.model) {
+        this.onThinkFail?.(task.sessionId, task.thinkId, error ?? '整体摘要模型不可用')
+        return
+      }
+      const timeoutMs = (o.refineTimeout ?? 60) * 1000
+      const res = await Promise.race([
+        this.runThinkRefine(llm, routeTask, route, o.maxInputTokens ?? 800, o.outputTokens ?? 512),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('think summary timeout after ' + timeoutMs + 'ms')), timeoutMs)
+        }),
+      ])
+      if (res && res.text.length > 0) {
+        this.applyThink?.(task.sessionId, task.thinkId, res.text, {
+          input: res.inputTokens,
+          output: estimateTokens(res.text),
+        })
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      // eslint-disable-next-line no-console
+      console.error('[dsh-think-summary] think summary failed:', task.sessionId, task.thinkId, reason)
+      this.onThinkFail?.(task.sessionId, task.thinkId, reason)
+    }
+  }
+}
+
+/**
+ * 读一个摘要流并做统一校验（段精炼与整体摘要共用）：
+ *  - 终态 `finish{kind:'error'|'aborted'}` 必须抛错——provider 失败不抛异常，
+ *    只看 text-delta 会把它静默吞掉（段永远停在"待精炼"，实测踩过）
+ *  - 无文本（含 max-tokens 把预算烧在推理上）必须抛错并写回原因
+ *  - 归一化后为空、或不是中文，同样抛错（不让英文/小作文冒充"已精炼"）
+ * @param stream - llm.stream 的 chunk 流。
+ * @param where - `provider/model`，写进错误信息便于定位。
+ * @returns 归一化后的摘要（保证非空且含中文）。
+ */
+async function readSummaryStream(
+  stream: AsyncIterable<{ type?: string; text?: string }>,
+  where: string,
+): Promise<string> {
+  let out = ''
+  let finishKind = ''
+  let failure: { message?: string; code?: string; status?: number } | undefined
+  for await (const chunk of stream) {
+    const c = chunk as {
+      type?: string
+      text?: string
+      reason?: { kind?: string; failure?: { message?: string; code?: string; status?: number } }
+    }
+    if (c && c.type === 'text-delta' && typeof c.text === 'string') out += c.text
+    else if (c && c.type === 'finish') {
+      finishKind = c.reason?.kind ?? ''
+      failure = c.reason?.failure
+    }
+  }
+  if (finishKind === 'error' || finishKind === 'aborted') {
+    const parts = [
+      failure?.code,
+      failure?.status === undefined ? undefined : `HTTP ${failure.status}`,
+      failure?.message,
+    ].filter((x): x is string => typeof x === 'string' && x.length > 0)
+    throw new Error(`${where} ${finishKind}：${parts.length > 0 ? parts.join(' ') : '无详情'}`)
+  }
+  const trimmed = out.trim()
+  if (trimmed.length === 0) {
+    throw new Error(
+      `${where} 未返回文本（finish=${finishKind || 'none'}）`
+      + (finishKind === 'max-tokens' ? '：预算被推理耗尽，请调大「精炼预算」' : ''),
+    )
+  }
+  const text = normalizeSummary(trimmed)
+  if (text.length === 0) throw new Error(`${where} 未返回可用摘要（归一化后为空）`)
+  if (!CJK_CHAR_RE.test(text)) throw new Error(`${where} 摘要不是中文：「${text}」`)
+  return text
 }

@@ -7,10 +7,20 @@
  * 滚回底部自动恢复。折叠状态持久化（localStorage），切选项卡不丢失。
  * 每个 think 一个可折叠卡片：段摘要 + 原始/精炼双 token + 状态标签。
  * 代码块/表格（ignore 模式）不显示。
+ *
+ * **再试**（0.1.4）：每个未精炼段右侧一个「再试」按钮，展开的卡片顶部还有
+ * 「重试全部未精炼 · N」批量按钮；点击后 POST /api/think-summary/refine，
+ * Host 用段原文（state.source）重新入队精炼。旧落盘记录没有原文 → 按钮禁用
+ * 并给出提示（`retryable === false`）。
  */
 
 /** 折叠状态持久化键。 */
 const OPEN_MAP_KEY = 'dsh.thinkSummary.openMap.v1'
+
+/** 段是否需要（并可以）重试：未精炼、非结构化摘要段、非主模型自产小结。 */
+function segNeedsRetry(s) {
+  return !s.refined && !s.skipReason && s.kind !== 'self'
+}
 
 /** 找列表所在的**实际可滚动**祖先（不依赖 data-conversation-scroll 标记，
  * 避免误命中非滚动容器导致 scrollTop 设置无效）。 */
@@ -53,6 +63,9 @@ function makeThinkSummaryView() {
     const sessionId = props && props.sessionId
     const { state, enabled } = useThinkState(sessionId)
     const [openMap, setOpenMap] = React.useState(readOpenMap)
+    // 正在重试的键（'think:index' 单段 / 'think:*' 批量），按钮显示"重试中…"
+    const [retrying, setRetrying] = React.useState({})
+    const [retryMsg, setRetryMsg] = React.useState('')
     const listRef = React.useRef(null)
     // 是否停在底部（用户滚动时由 scroll 事件实时更新；仅在底部时自动跟随）
     const atBottomRef = React.useRef(true)
@@ -93,19 +106,87 @@ function makeThinkSummaryView() {
     })
     const open = (id) => (openMap[id] === undefined ? true : openMap[id])
 
+    /**
+     * 触发重试：单段（thinkId + segmentIndex）或整卡（all=true）。
+     * Host 重新入队精炼；状态由 useThinkState 的轮询带回（≤1.5s）。
+     */
+    const retry = async (thinkId, segmentIndex, all) => {
+      if (!sessionId) return
+      const key = thinkId + ':' + (all ? '*' : segmentIndex)
+      setRetrying((m) => ({ ...m, [key]: true }))
+      setRetryMsg('')
+      try {
+        const res = await fetch(REFINE_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(all ? { sessionId, thinkId, all: true } : { sessionId, thinkId, segmentIndex }),
+        })
+        const json = await res.json()
+        if (!json || json.ok !== true) {
+          setRetryMsg('重试失败：' + String((json && json.message) || '未知错误'))
+        } else if (json.queued === 0 && json.refused > 0) {
+          setRetryMsg('该段无原文（0.1.4 之前的记录），无法重试')
+        } else if (json.queued === 0) {
+          setRetryMsg('没有可重试的段')
+        }
+      } catch (e) {
+        setRetryMsg('重试失败：' + String((e && e.message) || e))
+      } finally {
+        // 保留 3s 的"重试中…"：轮询更慢时按钮不会立刻回到可点状态
+        setTimeout(() => setRetrying((m) => { const n = { ...m }; delete n[key]; return n }), 3000)
+      }
+    }
+
     const thinkCards = visible.map((t) => {
-      const segs = (t.segments || []).map((s) =>
-        React.createElement(
+      const segs = (t.segments || []).map((s) => {
+        const needsRetry = segNeedsRetry(s)
+        const canRetry = s.retryable === true
+        const busy = retrying[t.id + ':' + s.index] === true
+        const retryBtn = needsRetry
+          ? React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'ts-view-retry',
+                disabled: busy || !canRetry,
+                title: canRetry
+                  ? '用段原文重新精炼这一段'
+                  : '该段没有原文（0.1.4 之前的记录），无法重试',
+                onClick: () => void retry(t.id, s.index, false),
+              },
+              busy ? '重试中…' : '再试',
+            )
+          : null
+        return React.createElement(
           'div', { key: t.id + ':' + s.index, className: 'ts-view-seg' },
           React.createElement(
             'div', { className: 'ts-view-seg-head' },
             React.createElement('span', null, segHeadLabel(s, '')),
-            segStatusEl(s),
+            React.createElement('span', { className: 'ts-view-seg-actions' }, segStatusEl(s), retryBtn),
           ),
           React.createElement('div', { className: 'ts-view-seg-text' }, s.summary),
-        ),
-      )
+        )
+      })
       const refinedCount = t.segments.filter((x) => x.refined).length
+      // 可批量重试的段：未精炼 + 有原文（老记录点了也只会被拒，故不计入）
+      const retryableCount = t.segments.filter((x) => segNeedsRetry(x) && x.retryable === true).length
+      const allBusy = retrying[t.id + ':*'] === true
+      const bulkRow = retryableCount > 0
+        ? React.createElement(
+            'div', { className: 'ts-view-bulk' },
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'ts-view-retry',
+                disabled: allBusy,
+                title: '把这次思考里所有未精炼的段重新入队精炼',
+                onClick: () => void retry(t.id, -1, true),
+              },
+              allBusy ? '重试中…' : '重试全部未精炼 · ' + retryableCount,
+            ),
+          )
+        : null
       const expanded = open(t.id)
       return React.createElement(
         'div', { key: t.id, className: 'ts-view-card', 'data-open': expanded ? 'true' : 'false' },
@@ -120,7 +201,7 @@ function makeThinkSummaryView() {
           ),
           refinedCount > 0 ? React.createElement('span', { className: 'ts-seg-refined' }, refinedCount + ' 段已精炼') : null,
         ),
-        expanded ? React.createElement('div', { className: 'ts-view-body' }, ...segs) : null,
+        expanded ? React.createElement('div', { className: 'ts-view-body' }, bulkRow, ...segs) : null,
       )
     })
 
@@ -133,6 +214,7 @@ function makeThinkSummaryView() {
         React.createElement('span', { className: 'ts-view-title-lg' }, '思考总结'),
         React.createElement('span', { className: 'ts-view-sub' }, '当前会话 · ' + visible.length + ' 次思考' + (state && state.thinkingTokens ? ' · 累计 ' + fmtTok(state.thinkingTokens) + ' tok' : '')),
       ),
+      retryMsg ? React.createElement('div', { className: 'ts-view-msg' }, retryMsg) : null,
       visible.length === 0
         ? React.createElement('div', { className: 'ts-view-empty' }, '暂无思考总结。触发长思考（超过阈值）后，这里会列出每段摘要。')
         : React.createElement('div', { className: 'ts-view-list', ref: listRef }, ...thinkCards),

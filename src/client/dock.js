@@ -18,12 +18,38 @@ function isChatTabActive() {
   return s === '对话' || s.toLowerCase() === 'chat'
 }
 
+/** "上次思考"折叠状态持久化键（默认展开：新思考一出段就收起太早，用户看不清）。 */
+const PREV_OPEN_KEY = 'dsh.thinkSummary.dockPrevOpen.v1'
+
+function readPrevOpen() {
+  try {
+    const raw = localStorage.getItem(PREV_OPEN_KEY)
+    if (raw === '0') return false
+    if (raw === '1') return true
+  } catch {
+    /* 不可用则用默认 */
+  }
+  return true // 默认展开
+}
+
+function writePrevOpen(v) {
+  try {
+    localStorage.setItem(PREV_OPEN_KEY, v ? '1' : '0')
+  } catch {
+    /* 忽略 */
+  }
+}
+
 function makeInputDock() {
   return function ThinkInputDock(props) {
     const sessionId = props && props.sessionId
     const { state, enabled, paused } = useThinkState(sessionId)
     const [open, setOpen] = React.useState(true)
-    const [prevOpen, setPrevOpen] = React.useState(false)
+    const [prevOpen, setPrevOpen] = React.useState(readPrevOpen)
+    const togglePrev = () => setPrevOpen((v) => {
+      writePrevOpen(!v) // 记住用户选择：上次思考的展开状态不再被自动收起
+      return !v
+    })
     const [chatView, setChatView] = React.useState(true)
     const [pauseBusy, setPauseBusy] = React.useState(false)
     // 自动滚底（对齐"思考总结"选项卡行为）：数据更新时若停在底部则跟随滚底，
@@ -127,26 +153,26 @@ function makeInputDock() {
         React.createElement('div', { className: 'ts-dock-placeholder' }, '当前思考积累中 · ' + fmtTok(think.tokens) + ' tok…'),
       )
     } else {
-      // 当前思考已有段：显示当前段；上次思考收成可展开一行
+      // 当前思考已有段：显示当前段；上次思考默认可展开（状态持久化）
       const prevToggle = prev && prev.segments.length > 0
         ? React.createElement(
             'button',
             {
               type: 'button',
               className: 'ts-dock-prev',
-              onClick: () => setPrevOpen(!prevOpen),
+              onClick: togglePrev,
               'aria-expanded': prevOpen ? 'true' : 'false',
             },
             chevronRightEl('ts-dock-prev-chevron'),
-            React.createElement('span', null, '上次思考 · ' + prev.segments.length + ' 段'),
+            React.createElement('span', null, '上次思考 · ' + prev.segments.length + ' 段' + (prevOpen ? '' : '（点击展开）')),
           )
         : null
       body = React.createElement(
         React.Fragment,
         null,
-        think.segments.length > 0 ? segEls(think, '') : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考…'),
         prevToggle,
         prevOpen && prev ? React.createElement('div', { className: 'ts-dock-prev-body' }, ...segEls(prev, '上次 · ')) : null,
+        think.segments.length > 0 ? segEls(think, '') : React.createElement('div', { className: 'ts-dock-placeholder' }, '正在积累思考…'),
       )
     }
 

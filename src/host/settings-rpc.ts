@@ -1,5 +1,5 @@
 import { whenWebServer, writeJson, readJsonBody, isLoopback, type RouteReq, type RouteRes } from './webserver.js'
-import type { CtxLike } from './ctx.js'
+import type { CtxLike, SettingsServiceLike } from './ctx.js'
 
 /**
  * 自建设置桥（M4 部署修正）：
@@ -14,20 +14,6 @@ import type { CtxLike } from './ctx.js'
 
 const NS_STRING = 'think-summary'
 
-/** 设置服务的结构面（运行时真对象更大，这里只声明用到的）。 */
-interface SettingsLike {
-  writable?: boolean
-  describe?: (options?: { redactSecrets?: boolean }) => Array<{
-    ns: unknown
-    value?: unknown
-    base?: unknown
-    user?: unknown
-    revision?: number
-  }>
-  get?: (ns: unknown) => unknown
-  mutate?: (ns: unknown, ops: unknown, expectedRevision?: number) => Promise<unknown>
-}
-
 interface SettingsOp {
   op: 'set' | 'unset'
   path: string[]
@@ -35,11 +21,11 @@ interface SettingsOp {
 }
 
 export function installSettingsRpc(ctx: CtxLike): void {
-  const settings = (): SettingsLike | undefined => ctx.get('settings') as SettingsLike | undefined
+  const settings = (): SettingsServiceLike | undefined => ctx.get('settings') as SettingsServiceLike | undefined
 
   /** 命名空间视图：{ ns, value, base, user, revision, writable }。 */
-  const namespaceView = (s: SettingsLike) => {
-    const descriptor = (s.describe?.({ redactSecrets: true }) ?? []).find((d) => String(d.ns) === NS_STRING)
+  const namespaceView = (s: SettingsServiceLike) => {
+    const descriptor = s.describe({ redactSecrets: true }).find((d) => String(d.ns) === NS_STRING)
     if (descriptor === undefined) return undefined
     return {
       ns: NS_STRING,
@@ -76,7 +62,7 @@ export function installSettingsRpc(ctx: CtxLike): void {
           return writeJson(res, 400, { ok: false, code: 'rejected', message: 'invalid mutate payload' })
         }
         try {
-          await s.mutate?.(NS_STRING, body.ops, body.expectedRevision)
+          await s.mutate(NS_STRING, body.ops, body.expectedRevision)
           const view = namespaceView(s)
           if (!view) return writeJson(res, 200, { ok: false, code: 'internal', message: 'namespace disposed after mutate' })
           writeJson(res, 200, { ok: true, value: view })

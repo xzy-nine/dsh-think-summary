@@ -82,6 +82,8 @@ export function installDetect(
         store.pushSegment(state, think.id, {
           index: idx,
           summary: choice.summary,
+          // 段原文：视图页「再试」重跑精炼用（view() 不上行，只带 retryable 标记）
+          source: text,
           tokens,
           // 原始 token = 段文本 + 本段之前被忽略的代码/表格 token（精炼前/忽略前口径）
           rawTokens: rawTokens ?? tokens,

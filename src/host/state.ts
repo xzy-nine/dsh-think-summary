@@ -8,6 +8,11 @@
 export interface SegmentSummary {
   index: number
   summary: string
+  /**
+   * 段原文（含被裁剪前的完整段文本）。仅 Host 侧使用：视图页「再试」重跑精炼时
+   * 需要原文，view() 会把它剥离、只留 `retryable` 标记。
+   */
+  source?: string
   /** 段文本 token（进缓冲的内容）。 */
   tokens: number
   /** 原始 token = 段文本 + 本段之前被忽略的代码/表格 token（精炼前/忽略前口径）。 */
@@ -32,9 +37,23 @@ export interface ThinkGroup {
   tokens: number
   startedAt: number
   segments: SegmentSummary[]
-  /** 会话 turn/step 标记（assistant/message 事件打标，供聊天流内 turnTail 匹配）。 */
+  /**
+   * 整体动向摘要（第二遍：把该 think 的分段摘要再喂一次模型，得到一句话）。
+   * UI 里常显这一句，逐段列表默认折叠。
+   */
+  summary?: string
+  /** 整体摘要消耗（输入 = 段摘要拼接，输出 = 摘要）。 */
+  summaryTokens?: { input?: number; output?: number }
+  /** 整体摘要失败原因（UI 可显示，不影响段摘要）。 */
+  summaryReason?: string
+  /** 会话 turn/step 标记（assistant/message 事件打标，供聊天流内定位）。 */
   turn?: number
   step?: number
+  /**
+   * 该步 assistant 消息 id（assistant/message 事件打标）。聊天流内按"思考行下方"
+   * 渲染时靠它匹配：`conversation.chat.assistant-actions` 的 owner 只给 messageId。
+   */
+  messageId?: string
 }
 
 export interface ThinkState {
@@ -182,7 +201,7 @@ export class ThinkStateStore {
     return removed
   }
 
-  /** 供 Client 轮询的纯 JSON 视图（剥离内部 hashes/nextThinkId）。 */
+  /** 供 Client 轮询的纯 JSON 视图（剥离内部 hashes/nextThinkId/段原文）。 */
   view(sessionId: string): Omit<ThinkState, 'hashes' | 'nextThinkId'> | undefined {
     const s = this.get(sessionId)
     if (!s) return undefined
@@ -192,8 +211,64 @@ export class ThinkStateStore {
       inSplice: s.inSplice,
       thinkingTokens: s.thinkingTokens,
       updatedAt: s.updatedAt,
-      thinks: s.thinks.map((t) => ({ ...t, segments: t.segments.slice() })),
+      thinks: s.thinks.map((t) => ({
+        ...t,
+        // 段原文不上行（体积大且客户端用不到）；只带一个 canRetry 标记，
+        // 视图页据此决定「再试」按钮是否可点（旧记录没有原文）
+        segments: t.segments.map(({ source, ...rest }) => ({
+          ...rest,
+          retryable: typeof source === 'string' && source.length > 0,
+        })),
+      })),
     }
+  }
+
+  /**
+   * 标记某个段重新入队精炼：清掉上一次的未精炼原因并通知（UI 立刻回到“待精炼”）。
+   * @returns 该段是否存在。
+   */
+  markRetry(sessionId: string, thinkId: string, segmentIndex: number): boolean {
+    const s = this.get(sessionId)
+    const seg = s?.thinks.find((t) => t.id === thinkId)?.segments[segmentIndex]
+    if (!seg) return false
+    seg.unrefinedReason = undefined
+    s.updatedAt = Date.now()
+    this.notify()
+    return true
+  }
+
+  /** 取段的可重试原文（无原文返回 undefined）。 */
+  sourceOf(sessionId: string, thinkId: string, segmentIndex: number): string | undefined {
+    const seg = this.get(sessionId)?.thinks.find((t) => t.id === thinkId)?.segments[segmentIndex]
+    const src = seg?.source
+    return typeof src === 'string' && src.length > 0 ? src : undefined
+  }
+
+  /** 写入整体摘要（第二遍结果）；失败原因走 {@link setThinkSummaryFailure}。 */
+  setThinkSummary(
+    sessionId: string,
+    thinkId: string,
+    summary: string,
+    tokens: { input?: number; output?: number },
+  ): void {
+    const think = this.get(sessionId)?.thinks.find((t) => t.id === thinkId)
+    if (!think) return
+    think.summary = summary
+    think.summaryTokens = tokens
+    think.summaryReason = undefined
+    const s = this.get(sessionId)
+    if (s) s.updatedAt = Date.now()
+    this.notify()
+  }
+
+  /** 记录整体摘要失败原因（不清除已有的整体摘要）。 */
+  setThinkSummaryFailure(sessionId: string, thinkId: string, reason: string): void {
+    const think = this.get(sessionId)?.thinks.find((t) => t.id === thinkId)
+    if (!think) return
+    think.summaryReason = reason
+    const s = this.get(sessionId)
+    if (s) s.updatedAt = Date.now()
+    this.notify()
   }
 
   get lastActive(): string | undefined {
@@ -219,6 +294,10 @@ export class ThinkStateStore {
           startedAt: t.startedAt,
           turn: t.turn,
           step: t.step,
+          messageId: t.messageId,
+          summary: t.summary,
+          summaryTokens: t.summaryTokens,
+          summaryReason: t.summaryReason,
           segments: t.segments.map((seg) => ({ ...seg })),
         })),
         nextThinkId: s.nextThinkId,
@@ -247,6 +326,10 @@ export class ThinkStateStore {
           startedAt: typeof t.startedAt === 'number' ? t.startedAt : Date.now(),
           turn: typeof t.turn === 'number' ? t.turn : undefined,
           step: typeof t.step === 'number' ? t.step : undefined,
+          messageId: typeof t.messageId === 'string' ? t.messageId : undefined,
+          summary: typeof t.summary === 'string' ? t.summary : undefined,
+          summaryTokens: t.summaryTokens,
+          summaryReason: typeof t.summaryReason === 'string' ? t.summaryReason : undefined,
           segments: t.segments.map((seg) => ({ ...seg })),
         }))
     }

@@ -50,11 +50,15 @@ const FIELD_GROUPS = [
         ],
         hint: '精炼输入预算内的裁剪策略；完整保留不裁剪但最耗 token',
       },
-      { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）' },
+      { key: 'refineMaxInputTokens', label: '精炼输入预算', kind: 'num', unit: 'tok', hint: '喂给小模型的段文本预算（按下方裁剪策略裁剪后）' },
+      { key: 'refineOutputTokens', label: '精炼预算', kind: 'num', unit: 'tok', hint: 'API 完成预算（推理+答案）；关思考的模型 512 足够，未关思考的推理型模型建议 ≥1024' },
+      { key: 'refineMinTokens', label: '精炼最小段', kind: 'num', unit: 'tok', hint: '低于该值的段跳过精炼、保留启发式摘要；0（默认）= 每个段都精炼' },
       { key: 'refineConcurrency', label: '精炼并发', kind: 'num', unit: '', hint: '并行精炼数；并发执行，任务之间互不打断' },
       { key: 'refineTimeout', label: '精炼超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死任务超时放弃并释放并发位' },
-      { key: 'refineModel', label: '精炼模型', kind: 'model', hint: 'auto（推荐）= 精炼时自动选用当前会话 provider 的最小可用模型；或从列表固定指定。选 auto 时下方显示当前会话模型' },
-      { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '精炼时发给模型的 system 提示词（可修改，留空恢复默认）' },
+      { key: 'refineProvider', label: '精炼供应商', kind: 'provider', hint: 'auto（推荐）= 精炼时自动跟随主请求的供应商；或手动指定任一已注册供应商（可选用其他供应商的模型）' },
+      { key: 'refineModel', label: '精炼模型', kind: 'model', hint: 'auto（推荐）= 精炼时自动选用所选供应商的最小可用模型；或从列表固定指定' },
+      { key: 'refinePrompt', label: '精炼提示词', kind: 'area', hint: '第一遍（分段）发给模型的 system 提示词；片段包裹与"要求后置"由代码固定' },
+      { key: 'refineThinkPrompt', label: '整体摘要提示词', kind: 'area', hint: '第二遍：把分段摘要再喂一次，得到整次思考的一句话动向（常显，段列表默认折叠）' },
     ],
   },
   {
@@ -180,13 +184,15 @@ function makeSettingsCard(scope) {
     const [seed, setSeed] = React.useState(0)
     const [open, setOpen] = React.useState(false)
     const [cleanBusy, setCleanBusy] = React.useState(false)
-    // 精炼模型下拉：可用模型列表 + 当前默认选中模型（auto 时显示）
-    const [models, setModels] = React.useState([])
+    // 精炼供应商/模型下拉：已注册供应商目录 + 每个供应商的可用模型 + 当前会话模型
+    const [providers, setProviders] = React.useState([])
+    const [modelsByProvider, setModelsByProvider] = React.useState({})
+    const [currentProvider, setCurrentProvider] = React.useState('')
     const [currentModel, setCurrentModel] = React.useState('')
     // 分组折叠状态：默认全部折叠
     const [groupOpen, setGroupOpen] = React.useState({})
 
-    // 加载精炼模型下拉数据（可用模型 + 当前选中）
+    // 加载精炼供应商/模型下拉数据（/models 路由：providers + 各自的模型目录）
     React.useEffect(() => {
       let alive = true
       const load = async () => {
@@ -195,10 +201,12 @@ function makeSettingsCard(scope) {
           if (!response.ok) return
           const json = await response.json()
           if (!alive || !json || json.ok !== true) return
-          if (Array.isArray(json.models)) setModels(json.models)
+          if (Array.isArray(json.providers)) setProviders(json.providers)
+          if (json.modelsByProvider && typeof json.modelsByProvider === 'object') setModelsByProvider(json.modelsByProvider)
+          if (typeof json.provider === 'string') setCurrentProvider(json.provider)
           if (typeof json.current === 'string') setCurrentModel(json.current)
         } catch {
-          /* 模型目录不可用：下拉只剩"自动" */
+          /* 目录不可用：下拉只剩"自动" */
         }
       }
       void load()
@@ -382,21 +390,49 @@ function makeSettingsCard(scope) {
             },
             (f.options || []).map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
           )
-        } else if (f.kind === 'model') {
-          // 精炼模型下拉：'auto' + 可用模型列表；auto 时显示当前选中模型
+        } else if (f.kind === 'provider') {
+          // 精炼供应商下拉：'auto'（跟随主请求供应商）+ 已注册供应商目录
           const cur = value || 'auto'
-          const opts = [['auto', '自动（' + (currentModel || '最小可用模型') + '）']]
+          const opts = [['auto', '自动（跟随主请求' + (currentProvider ? '：' + currentProvider : '') + '）']]
           const seen = new Set(['auto'])
-          for (const m of models) {
+          for (const p of providers) {
+            const id = p && typeof p.id === 'string' ? p.id : ''
+            if (id.length === 0 || seen.has(id)) continue
+            seen.add(id)
+            const name = p && typeof p.name === 'string' && p.name.length > 0 && p.name !== id ? id + '（' + p.name + '）' : id
+            opts.push([id, name])
+          }
+          // 保存值不在目录（如供应商已卸载）：保留为额外选项，便于改回
+          if (!seen.has(cur)) opts.push([cur, cur + '（未注册）'])
+          control = React.createElement(
+            'select',
+            {
+              className: 'ts-set-input', value: cur,
+              disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
+            },
+            opts.map((o) => React.createElement('option', { key: o[0], value: o[0] }, o[1])),
+          )
+        } else if (f.kind === 'model') {
+          // 精炼模型下拉：'auto' + 所选供应商的可用模型列表（供应商为 auto 时用当前会话供应商）
+          const cur = value || 'auto'
+          const providerValue = draft.refineProvider || 'auto'
+          const effectiveProvider = providerValue === 'auto' ? currentProvider : providerValue
+          const available = Array.isArray(modelsByProvider[effectiveProvider]) ? modelsByProvider[effectiveProvider] : []
+          const autoLabel = providerValue === 'auto'
+            ? '自动（' + (currentModel || '最小可用模型') + '）'
+            : '自动（' + effectiveProvider + ' 最小可用模型）'
+          const opts = [['auto', autoLabel]]
+          const seen = new Set(['auto'])
+          for (const m of available) {
             if (typeof m === 'string' && m.length > 0 && !seen.has(m)) {
               seen.add(m)
               opts.push([m, m])
             }
           }
-          // 保存值不在列表（如旧自定义值）：保留为额外选项
+          // 保存值不在列表（如旧自定义值/已切换供应商）：保留为额外选项
           if (!seen.has(cur)) opts.push([cur, cur])
-          const currentNote = cur === 'auto' && currentModel
-            ? React.createElement('p', { className: 'ts-set-hint' }, '当前会话模型：' + currentModel + '（精炼将自动选用最小可用模型）')
+          const currentNote = cur === 'auto' && currentModel && providerValue === 'auto'
+            ? React.createElement('p', { className: 'ts-set-hint' }, '当前会话模型：' + currentProvider + ' / ' + currentModel + '（精炼将自动选用最小可用模型）')
             : null
           control = React.createElement(
             React.Fragment, null,

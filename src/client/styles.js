@@ -67,6 +67,26 @@ const PANEL_CSS = `
 .ts-tail-seg-head{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
 .ts-tail-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
 
+/* ---------- 对话体内：每步思考总结卡（委托 assistant-step，插在思考行之后正文之前） ---------- */
+/* 观感对齐"流式思考链"：首行加粗=整体动向，下面一行一条分段过程，淡入出现。 */
+.ts-proc-card{margin:6px 0;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;overflow:hidden}
+.ts-proc-card:hover{border-color:var(--dsw-alias-label-dimmed)}
+.ts-proc-head{display:flex;align-items:flex-start;gap:8px;width:100%;padding:8px 12px;background:transparent;border:none;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left}
+.ts-proc-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ts-proc-card-chevron{flex:none;margin-top:3px;color:var(--dsw-alias-label-tertiary);transition:transform .16s}
+.ts-proc-card[data-open="true"] .ts-proc-card-chevron{transform:rotate(180deg)}
+/* 第一行：整体总结（加粗） */
+.ts-proc-headline{flex:1;min-width:0;font-size:13px;font-weight:700;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
+.ts-proc-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.6}
+.ts-proc-body{padding:0 12px 8px 32px}
+/* 过程行：一条一行，超出省略，悬停看全文 */
+.ts-proc-line{display:flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary);animation:ts-proc-in .28s ease both}
+.ts-proc-line[data-dim="true"]{color:var(--dsw-alias-label-tertiary)}
+.ts-proc-line-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ts-proc-line-retry{opacity:0;flex:none;transition:opacity .12s}
+.ts-proc-line:hover .ts-proc-line-retry,.ts-proc-line-retry:focus-visible{opacity:1}
+@keyframes ts-proc-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
+
 /* ---------- 思考总结视图（对齐原生 trajectory 工具栏 + 原生卡片） ---------- */
 .ts-view{box-sizing:border-box;width:100%;max-width:calc(var(--dsh-composer-card-max-width) - 2 * var(--dsh-composer-dock-inset, 8px));margin:0 auto;padding:0 12px 32px}
 .ts-view-header{position:sticky;top:0;z-index:1;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);align-items:baseline;gap:10px;padding:8px 4px;display:flex}
@@ -87,7 +107,15 @@ const PANEL_CSS = `
 .ts-view-seg{padding:6px 12px 6px 26px}
 .ts-view-seg + .ts-view-seg{border-top:1px solid var(--dsw-alias-border-l2)}
 .ts-view-seg-head{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-tertiary)}
+.ts-view-seg-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
 .ts-view-seg-text{font-size:12.5px;line-height:1.5;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;white-space:pre-wrap}
+/* 「再试」：描边小按钮，对齐设置卡的次要按钮（discard）视觉 */
+.ts-view-retry{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:1px 8px;font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary);background:transparent}
+.ts-view-retry:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
+.ts-view-retry:disabled{opacity:.4;cursor:default}
+.ts-view-retry:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.ts-view-bulk{padding:8px 12px 4px 26px;display:flex;gap:6px}
+.ts-view-msg{padding:6px 12px;font-size:11.5px;color:var(--dsw-alias-label-tertiary)}
 
 /* ---------- 设置卡片（对齐原生 PluginCard + ValueField） ---------- */
 .ts-set-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;overflow:hidden;transition:border-color .16s,background .16s}

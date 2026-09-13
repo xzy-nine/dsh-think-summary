@@ -29,6 +29,37 @@ export interface DefaultModel {
   model: string
 }
 
+/** assistant/message 的负载里可能带思考文本的字段（v3 会话格式）。 */
+interface AssistantMessageData {
+  stream?: Array<{ chunk?: { type?: string; text?: string } }>
+  message?: { content?: Array<{ type?: string; text?: string }> }
+}
+
+/**
+ * 从 `assistant/message` 负载里取出这一步的思考原文。
+ *
+ * 会话格式 v3 起，逐 delta 的 `assistant/chunk` 日志事件已不存在（流式记录改为
+ * 随 `assistant/message.data.stream` 一起提交），所以兜底路径不能再依赖 chunk 缓冲：
+ *  1. `data.stream` 的 reasoning-delta 记录（精确重建）
+ *  2. `data.message.content` 的 reasoning 内容块（同样的文本，已被合并）
+ * @param data - `assistant/message` 的 data 负载。
+ * @returns 思考原文；没有思考时为空串。
+ */
+export function reasoningTextOf(data: AssistantMessageData | undefined): string {
+  if (!data) return ''
+  const fromStream = (data.stream ?? [])
+    .map((record) => record?.chunk)
+    .filter((chunk): chunk is { type?: string; text?: string } => chunk !== undefined)
+    .filter((chunk) => chunk.type === 'reasoning-delta' && typeof chunk.text === 'string')
+    .map((chunk) => chunk.text as string)
+    .join('')
+  if (fromStream.length > 0) return fromStream
+  return (data.message?.content ?? [])
+    .filter((block) => block?.type === 'reasoning' && typeof block.text === 'string')
+    .map((block) => block.text as string)
+    .join('\n')
+}
+
 export function installFallback(
   ctx: CtxLike,
   store: ThinkStateStore,
@@ -57,7 +88,15 @@ export function installFallback(
       const threshold = opts.thinkThresholdTokens ?? 2000
       const e = event as {
         type?: string
-        data?: { turn?: number; step?: number; chunk?: { type?: string; text?: string } }
+        data?: {
+          turn?: number
+          step?: number
+          chunk?: { type?: string; text?: string }
+          /** v3：assistant/message 的消息体（含 reasoning 内容块）。 */
+          message?: { id?: unknown; content?: Array<{ type?: string; text?: string }> }
+          /** v3：该步的流式记录（含 reasoning-delta）。 */
+          stream?: Array<{ chunk?: { type?: string; text?: string } }>
+        }
       }
       if (!e || !e.data) return
       const sid =
@@ -65,10 +104,13 @@ export function installFallback(
       if (!sid) return
       const turn = e.data.turn ?? 0
       const step = e.data.step ?? 0
+      // assistant/message 携带该步消息 id：聊天流内按"思考行下方"渲染时靠它匹配
+      const messageId =
+        e.data.message && typeof e.data.message.id === 'string' ? e.data.message.id : undefined
 
       /**
-       * 给实时路径（s 开头）的最新未打标 think 打 (turn, step) 标记，
-       * 供聊天流内 turnTail 按 turn 匹配。幂等：已打标/无未打标则跳过。
+       * 给实时路径（s 开头）的最新未打标 think 打 (turn, step, messageId) 标记，
+       * 供聊天流内按步匹配。幂等：已打标/无未打标则跳过。
        * 在 assistant/chunk（流进行中）与 assistant/message（流结束）都调用，
        * 双保险——事件流偶发缺失时任一触发即可打标。
        * 打标是元数据，暂停时也执行（暂停只停止新总结产出）。
@@ -81,7 +123,19 @@ export function installFallback(
           if (t && t.id.startsWith('s') && t.turn === undefined) {
             t.turn = turn
             t.step = step
+            if (messageId !== undefined) t.messageId = messageId
             break
+          }
+        }
+        // 已打过 turn/step 但还缺 messageId（chunk 阶段先打标、message 阶段补）：
+        // 只补当步最近的那一条，避免把上一步的 id 贴到这一步
+        if (messageId !== undefined) {
+          for (let i = s.thinks.length - 1; i >= 0; i--) {
+            const t = s.thinks[i]
+            if (t && t.id.startsWith('s') && t.turn === turn && t.step === step) {
+              t.messageId = messageId
+              break
+            }
           }
         }
       }
@@ -110,6 +164,7 @@ export function installFallback(
         const { state, think } = store.ensureThink(sid, thinkKey)
         think.turn = turn
         think.step = step
+        if (messageId !== undefined) think.messageId = messageId
         // 给最新已结束的实时 think 打 (turn, step) 标记（供聊天流内 turnTail 匹配）。
         // 从后往前找"最后一个 s 开头、未打标"的 think（该步 llm/stream 刚结束；
         // 不检查 active——assistant/message 事件可能先于流收尾的 endThink 到达，
@@ -119,18 +174,25 @@ export function installFallback(
         tagRealtimeThink()
         // 暂停：不补跑分段总结（旧总结照常显示），但上面的打标已执行
         if (store.paused) return
-        if (!entry || entry.text.length === 0) return
+        // 思考原文来源（会话格式 v3 起 `assistant/chunk` 已不存在，流式记录改随
+        // assistant/message 一起提交）：
+        //  1) 旧宿主：chunk 缓冲（若该事件仍存在）
+        //  2) v3：`data.stream` 里的 reasoning-delta 记录
+        //  3) v3 兜底：`data.message.content` 的 reasoning 内容块（完整文本）
+        const messageText = reasoningTextOf(e.data)
+        const thinkText = entry && entry.text.length > 0 ? entry.text : messageText
+        if (thinkText.length === 0) return
         // 与实时一致：未达长思考阈值（短思考，如工具调用间的几十 token 思考）
         // 不产出段——实时路径由 inSplice 门控不出段，兜底也必须一致，
         // 否则连续短思考会产生一连串几十 token 的小段
-        if (estimateTokens(entry.text) < threshold) return
+        if (estimateTokens(thinkText) < threshold) return
         // 同 (turn, step) 的实时 think 已产出分段则跳过兜底（防同一思考两套总结）
         const realtimeHasSegs = state.thinks.some(
           (t) => t.id.startsWith('s') && t.turn === turn && t.step === step && t.segments && t.segments.length > 0,
         )
         if (realtimeHasSegs || (state.inSplice && think.segments.length > 0)) return
         const outcomes = processThinking(
-          entry.text,
+          thinkText,
           {
             segmentMinTokens: opts.segmentMinTokens,
             segmentMaxTokens: opts.segmentMaxTokens,
@@ -157,6 +219,8 @@ export function installFallback(
           store.pushSegment(state, thinkKey, {
             index: idx,
             summary: o.summary,
+            // 段原文：视图页「再试」重跑精炼用
+            source: o.text,
             tokens: o.tokens,
             refined: false,
             skipReason: o.skipReason,
@@ -176,7 +240,7 @@ export function installFallback(
             })
           }
         }
-        think.tokens += estimateTokens(entry.text)
+        think.tokens += estimateTokens(thinkText)
         state.thinkingTokens = think.tokens
         if (state.thinkingTokens >= threshold) state.inSplice = true
         state.updatedAt = Date.now()

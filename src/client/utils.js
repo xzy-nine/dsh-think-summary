@@ -30,12 +30,14 @@ function segStatusEl(s) {
   return st ? React.createElement('span', { className: st.cls }, st.label) : null
 }
 
-/** 已精炼段的实际消耗标注：" · 精炼 ~N tok"（输入裁剪后 + 输出摘要）。 */
+/** 已精炼段的实际消耗标注：" · 精炼 in/out"（输入裁剪后 + 输出摘要）。 */
 function refineTokStr(s) {
   if (!s || !s.refined) return ''
   const rt = s.refineTokens || {}
-  const total = (rt.input || 0) + (rt.output || 0)
-  return total > 0 ? ' · 精炼 ~' + fmtTok(total) + ' tok' : ''
+  const input = rt.input || 0
+  const output = rt.output || 0
+  if (input <= 0 && output <= 0) return ''
+  return ' · 精炼 ' + fmtTok(input) + '→' + fmtTok(output) + ' tok'
 }
 
 /**

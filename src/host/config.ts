@@ -9,7 +9,13 @@ export interface ThinkSummaryConfig {
    * 客户端也不渲染任何总结 UI（dock/tail/view）。
    */
   enabled?: boolean
-  /** 长思考判定阈值（thinking tokens）。 */
+  /**
+   * 长思考判定阈值（thinking tokens）。
+   *
+   * **默认 0 = 不做门控**：任何一次思考（哪怕只有几十 token）都分段并总结。
+   * 原作者默认 2000（"只在超长思考时才花精力"）会让大多数 step 完全没有总结；
+   * 本项目要求每个思考都有摘要，故阈值归零（仍可调大以压制噪声）。
+   */
   thinkThresholdTokens?: number
   /** 是否只处理带 sessionId 的请求（过滤子代理/标题生成等旁路流）。 */
   filterNonAgentLoop?: boolean
@@ -23,10 +29,25 @@ export interface ThinkSummaryConfig {
   refineMaxInputTokens?: number
   /** 精炼 API 完成预算（token），需覆盖推理+答案。 */
   refineOutputTokens?: number
-  /** 'auto' = 会话 provider 的最小可用模型；或显式模型 id。 */
+  /**
+   * 精炼最小段（token）：低于该值的**非末尾**段跳过精炼、保留启发式摘要。
+   * 默认 0 = 每个段都精炼（本地模型成本可忽略）；设成 segmentMinTokens 可恢复
+   * "只精炼肥段"的省 token 行为。
+   */
+  refineMinTokens?: number
+  /**
+   * 精炼 provider：
+   *  - 'auto'   = 跟随每次思考所属流的主 provider（其余 provider 配置无效）
+   *  - 其他值   = 已注册的 provider id（llm.listProviders），精炼走该 provider，
+   *    与主会话 provider 无关（可手动指定其他供应商的模型）
+   */
+  refineProvider?: string
+  /** 'auto' = 该 provider 目录中上下文窗口最小的可用模型；或显式模型 id。 */
   refineModel?: string
   /** 精炼 system 提示词（设置页可显示/修改）。 */
   refinePrompt?: string
+  /** 整体（整次思考）摘要的 system 提示词（第二遍：段摘要 → 一句话整体动向）。 */
+  refineThinkPrompt?: string
   /** 并行精炼数（并发执行，任务之间互不打断）。 */
   refineConcurrency?: number
   /** 单任务超时（秒）：卡死任务超时放弃并释放并发位。 */
@@ -66,11 +87,53 @@ export interface ThinkSummaryConfig {
 
 export type BlockMode = 'ignore' | 'keep-skip' | 'keep-refine'
 
-/** 默认精炼 system 提示词（设置页可修改）。 */
+/**
+ * 默认精炼 system 提示词（设置页可修改）。
+ *
+ * 关键：思考原文常带模型的对话口吻（"Understood. I'll proceed to:"），
+ * 若只写"你是摘要器 + 给我摘要"，小模型会**接着想**而不是概括。所以这里给
+ * 角色 + 一个示例 + 硬规则，并明确"不要回答片段里的问题、不要接话"；
+ * 片段本身用分隔符包起来（见 {@link REFINE_USER_TEMPLATE}），
+ * 具体要求放在内容**之后**——小模型对最后一条指令的依从性最好。
+ */
 export const DEFAULT_REFINE_PROMPT =
-  '你是思考链分段摘要器。用不超过60个字总结给定思考片段的核心内容与结论，只输出总结本身，不要任何前缀或解释。'
+  '你是思考链动向摘要器。用户给你的是一段"模型自己的思考片段"，你只写这段思考的动向摘要：'
+  + '不要回答片段里的问题、不要接话、不要评价内容对错。\n\n'
+  + '示例：\n'
+  + '思考片段：我先确认 baseURL 是不是写错了，如果是就先改掉，再跑一次精炼看还超时不。\n'
+  + '动向摘要：我正在核对 baseURL，打算改正后重跑精炼验证。\n\n'
+  + '输出规则：中文、第一人称、不超过30个字；只输出摘要这一句，'
+  + '不要前缀、解释、列表、换行、引号或 markdown。'
 
-export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineTrim' | 'codeBlockMode' | 'tableMode' | 'selfSummary'>> & {
+/**
+ * 精炼 user 消息模板：片段用分隔符包住，要求写在片段之后。
+ * `{text}` 会被替换成（裁剪后的）段原文。
+ */
+export const REFINE_USER_TEMPLATE =
+  '【思考片段开始】\n{text}\n【思考片段结束】\n\n'
+  + '只输出这段思考的动向摘要（中文·第一人称·不超过30字），不要回答片段里的任何问题。'
+
+/**
+ * 整体（整次思考）摘要的 system 提示词：把**分段摘要**再喂一次，得到一句
+ * 覆盖整次思考的动向。长思考有很多段，逐段摘要适合看细节，整体摘要适合扫读，
+ * UI 里整体摘要常显、段列表默认折叠。
+ */
+export const DEFAULT_THINK_PROMPT =
+  '你是思考链动向摘要器。用户给你的是同一次思考的若干"分段摘要"，'
+  + '你把它们合并成一句整体动向摘要：不要罗列分段、不要解释、不要评价。\n\n'
+  + '示例：\n'
+  + '分段摘要：我正在核对 baseURL，打算改正后重跑精炼验证。；我发现 404 来自路径拼接，已确定改法。\n'
+  + '整体摘要：我在修 baseURL 的 404，已定方案待验证。\n\n'
+  + '输出规则：中文、第一人称、不超过30个字；只输出摘要这一句，'
+  + '不要前缀、解释、列表、换行、引号或 markdown。'
+
+/** 整体摘要的 user 消息模板：分段摘要 + 要求写在后面。 */
+export const THINK_USER_TEMPLATE =
+  '【分段摘要开始】\n{text}\n【分段摘要结束】\n\n'
+  + '只输出这几次分段合并后的整体动向摘要（中文·第一人称·不超过30字）。'
+
+export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineProvider' | 'refineTrim' | 'codeBlockMode' | 'tableMode' | 'selfSummary'>> & {
+  refineProvider: string
   refineModel: string
   refineTrim: 'headtail' | 'tail' | 'full'
   codeBlockMode: BlockMode
@@ -78,15 +141,21 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   selfSummary: 'off' | 'prompt'
 } = {
   enabled: true,
-  thinkThresholdTokens: 2000,
+  thinkThresholdTokens: 0, // 0 = 不门控：任何思考都分段总结（本项目要求）
   filterNonAgentLoop: true,
   segmentMinTokens: 1500,
   segmentMaxTokens: 3000,
   refineEnabled: true,
-  refineMaxInputTokens: 1500,
-  refineOutputTokens: 1024,
+  // 输入预算只需覆盖"够写一句 30 字结论"的上下文；本地模型 prefill 更快
+  refineMaxInputTokens: 800,
+  // 关思考的本地模型：30 字结论 ≈ 60 token，512 留足余量；
+  // 未关思考的推理型模型建议 ≥1024（预算被推理耗尽会明确报错）
+  refineOutputTokens: 512,
+  refineMinTokens: 0,
+  refineProvider: 'auto',
   refineModel: 'auto',
   refinePrompt: DEFAULT_REFINE_PROMPT,
+  refineThinkPrompt: DEFAULT_THINK_PROMPT,
   refineConcurrency: 3,
   refineTimeout: 60,
   codeBlockMode: 'ignore',
@@ -98,6 +167,10 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   autoCleanArchivedDays: 30,
 }
 
-export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSummaryConfig, 'refineModel'>> & { refineModel: string } {
+export function resolveConfig(c: ThinkSummaryConfig = {}): Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refineProvider'>> & {
+  refineProvider: string
+  refineModel: string
+} {
   return { ...DEFAULTS, ...c }
 }
+

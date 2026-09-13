@@ -13,15 +13,23 @@
 ### 目标
 1. **检测**：识别"过长"的思考链（以 thinking token 数为度量）。
 2. **分段**：思考进行中，把思考流切成有语义的段。
-3. **总结**：每段即时产出摘要；优先零成本启发式，按需用小模型精炼。
+3. **总结**：每段即时产出摘要（第一遍）；再把段摘要合并成一句整体动向（第二遍）。
 4. **展示**：思考进行中，在聊天区实时面板滚动显示各段摘要。
+   v0.1.4 起对话体内另有**每步总结卡**：以同一 key **委托官方 `assistant-step`**
+   （官方内容照常渲染，卡片追加在其下方，跟随滚动、流式期间就在）；卡片头部常显
+   整体摘要，段列表默认折叠。
 5. **省 token**：检测与分段 0 token；总结默认 0 token，精炼受严格成本控制。
 
 ### 非目标（v1 明确不做）
 - 不把总结写回会话上下文（用户已确认：仅 UI 展示）。
-- 不替换官方思考链渲染器（`assistant-step` 槽位是官方 UI，替换风险高）。
+- **不重写官方渲染**：`assistant-step` 内部是 `AssistantMarkdown`，接管它必须**委托**
+  官方组件（取官方条目 component + locale 后原样渲染），绝不自己实现 markdown/思考行；
+  官方组件取不到就不注册（退回只有输入框上方面板）。
+  实测排除了另外两条路：`turn-process` 节点在当前布局下根本不渲染；
+  `turnTail` / `assistant-actions` 都在回合末尾且要等回合结束。
 - 不做"思考死循环检测"（可作后续扩展）。
-- 不修改/限制模型的 reasoning effort（v1 只观察；`agent/request` 瀑布留作扩展点）。
+- 不修改/限制**主模型**的 reasoning effort（v1 只观察）。精炼调用同样不发送
+  `reasoningEffort`：关思考由 provider 侧声明（如 `reasoningEfforts: { off: none }`）决定。
 
 ---
 
@@ -105,7 +113,9 @@
   - 边界信号（达最小窗口后，切在**行前**、边界行进下一段）：标题、无序/有序/任务列表项、引用、分隔线、**行首结构词**（`其次 / 接下来 / 然后 / Finally / Second / Step N`）；
   - 围栏闭合为强边界（切在行后，代码段收尾；闭合行与后续内容同增量到达时由闭合事件驱动，不依赖尾行测试）；
   - **块切换是天然强边界**（探测确认）：`block-start` 的 `blockType` 从 `reasoning` 切到 `tool-call`/`text`，即"思考段结束"，`signalBoundary()` 触发切段（需达最小窗口）。
-- **流结束 flush**：末尾不完整段也要总结（`finish` 或迭代终止触发）；低于下限（64 tok）的小尾巴丢弃（省 token 规则④）。
+- **流结束 flush**：末尾不完整段也要总结（`finish` 或迭代终止触发）。
+  下限 `MIN_SEGMENT_FLOOR` 已从 64 改为 **0**：**任何短尾巴都出段并总结**
+  （本项目要求"只有几个字的思考也要有摘要"，原作者"丢小尾巴省 token"的规则已移除）。
 - **阈值门控产出**：阈值（2000）前切出的首段不入 state（长思考判定后才开始总结），检测器仍累计全部 token。
 - **去重**：state 级段哈希集合（`hashes`，view 时剥离）——`llm/stream` 随重试/重放被再次包裹也不会重复总结同一段。
 - **段元数据**：每段附带 `codeRatio`（围栏内字符占比）与 `isTable`，供"跳过代码段/表格段精炼"决策（省 token，见 4.3.2）。
@@ -120,7 +130,11 @@
 
 #### 4.3.2 小模型精炼（按需、可关）
 - **触发门控**（省 token 核心）：全局精炼开关开 **且** 段非代码段/表格段（`codeBlockMode`/`tableMode` 三态：默认 `ignore` 内容不写内存、总结卡片不显示任何代码块/表格痕迹；`keep-skip` 保留+结构化摘要不精炼；`keep-refine` 保留并精炼）。开启即全量精炼可精炼段，不做段大小门控。
-- **模型来源**：复用会话当前 provider，`llm.listModels` 选最小可用模型（`refineModel: 'auto'`）；目录不可用时回退主模型；不另配凭据。
+- **模型来源**：`refineProvider` 选定供应商——`'auto'`（默认）跟随该次思考所属主请求的
+  provider，或显式指定任一已注册 provider（`llm.listProviders()`，可跨供应商）；
+  再按该 provider 的 `llm.listModels` 选最小可用模型（`refineModel: 'auto'`）；
+  目录不可用且 provider 与主请求一致时回退主模型；不另配凭据。显式 provider 已卸载时
+  回退主请求 provider 并把原因写回段的"未精炼原因"。
 - **请求契约（探测确认，probe-notes.md §M3）**：`messages[].content` 必须是内容块 `[{type:'text',text}]`（字符串会被拒）；`system` 走顶层字段；该 provider **不支持** `reasoningEffort`（设置会报错）；模型总是先推理——`maxTokens`（API 预算，默认 1024）必须覆盖推理+答案，预算不足会卡在 `finish{kind:'max-tokens'}` 不出答案。
 - **输入输出硬限制**：输入裁剪三档（`refineTrim`）：`headtail` 头尾裁剪（默认，保头 ~30% + 尾 ~70%，丢中段）/ `tail` 仅保尾部 / `full` 完整保留（不裁剪，最耗 token）；输出 `min(段, 预算)`；提示词为固定短模板；答案展示时截断到 ~60 token（240 字符）。
 - **并发与取消**：独立队列，并发上限 1；**绝不 await 在主流迭代内**（fire-and-forget）；主流 error/abort 时**按 (会话, think) 精确取消**（不打断旧思考未完成的精炼）；正常 finish 让队列自然排空（精炼调用本身很短，~1.5s）。
@@ -190,13 +204,17 @@
 | `segmentMaxTokens` | `3000` | 段硬上限（缓冲上限） |
 | `filterNonAgentLoop` | `true` | 只处理带 sessionId 的请求（旁路流过滤） |
 | `refineEnabled` | `true` | 小模型精炼开关 |
-| `refineMinSegmentTokens` | `1200` | 精炼触发门槛（"肥"段） |
-| `refineMaxInputTokens` | `1500` | 精炼输入截断（段尾部） |
-| `refineOutputTokens` | `1024` | 精炼 API 完成预算（推理+答案） |
-| `refineModel` | `'auto'` | `'auto'` = 会话 provider 最小模型；可显式指定 |
+| `refineMinTokens` | `0` | 精炼最小段：0（默认）= 每个段都精炼；>0 时低于该值的非末尾段保留启发式摘要 |
+| `refineMaxInputTokens` | `800` | 精炼输入截断（段尾部；只需够写一句 30 字结论的上下文） |
+| `refineOutputTokens` | `512` | 精炼 API 完成预算（推理+答案）；关思考的模型够用，未关思考的推理型建议 ≥1024 |
+| `refineProvider` | `'auto'` | `'auto'` = 跟随主请求 provider；可显式指定任一已注册 provider（跨供应商精炼） |
+| `refineModel` | `'auto'` | `'auto'` = 所选 provider 最小模型；可显式指定 |
 
-设置 UI（M4 已实现）：Host 注册 `@deepseek-ai/dsh-settings` 命名空间
-（schemastery schema + `installSettingsSection`，`setSource/onChange` 实时生效）；
+默认精炼提示词（`DEFAULT_REFINE_PROMPT`）要求 **≤30 字、只输出一句话、不要前缀/解释/列表**，
+精炼结果展示截断为 60 字符。
+
+设置 UI（M4 已实现）：Host 注册 `settings` 命名空间（schemastery schema +
+服务方法 `installSection`，`setSource/onChange` 实时生效）；
 客户端在 **`settings.plugin.item`**（官方插件配置区）注册 think-summary 卡片，
 经 `ctx.settingsScope.bind({namespace})` 读写。
 
@@ -291,4 +309,4 @@ dsh-think-summary/
 
 ---
 
-*决策记录：实时拦截为主+日志兜底 · 混合总结引擎 · 仅 UI 展示不写回上下文 · input.dock 实时面板（仅摘要列表）· 独立仓库包 · 默认参数 2000/1500/3000/60 · 精炼复用会话 provider 最小模型。*
+*决策记录：实时拦截为主+日志兜底 · 混合总结引擎 · 仅 UI 展示不写回上下文 · input.dock 实时面板（仅摘要列表）· 独立仓库包 · 默认参数 2000/1500/3000/60 · 精炼默认复用会话 provider 最小模型，设置页可指定其他已注册供应商。*

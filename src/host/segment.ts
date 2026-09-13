@@ -48,8 +48,13 @@ export interface SegmentPiece {
   meta: SegmentMeta
 }
 
-/** flush 时小尾巴下限（token）：低于此值不产出段（design §5 硬规则④）。 */
-export const MIN_SEGMENT_FLOOR = 64
+/**
+ * flush 时小尾巴下限（token）：低于此值不产出段。
+ *
+ * **0 = 不丢弃任何尾巴**（本项目要求：哪怕只有几个字的短思考也要出摘要）。
+ * 原作者为省 token 设为 64，那会让短尾巴直接消失、看不到任何总结——已按需求移除。
+ */
+export const MIN_SEGMENT_FLOOR = 0
 
 /** 哈希去重（FNV-1a 简化）。 */
 export function hashText(s: string): string {
