@@ -17,7 +17,7 @@ import {
   REFINE_USER_TEMPLATE,
   THINK_USER_TEMPLATE,
 } from '../config.js'
-import { ModelPoolManager, formatModelRef, type ModelPool, type ModelRef } from '../pool.js'
+import { ModelPoolManager, formatModelRef, shouldDisableReasoning, type ModelPool, type ModelRef } from '../pool.js'
 
 /** 精炼 provider/模型解析结果。 */
 export interface RefineRoute {
@@ -654,38 +654,57 @@ export class RefineQueue {
       }
       lastRef = ref
       pool.acquire(ref)
+      // 自动开关思考：同一个模型最多试两次（先不带 reasoningEffort，失败后再带）。
+      // 这样"没关思考导致预算被推理烧光"的模型能自己救回来，而不必用户手配。
+      const tries = o.disableReasoning === true ? 2 : 1
       let timer: ReturnType<typeof setTimeout> | undefined
-      try {
-        const route: RefineRoute = { provider: ref.provider, model: ref.model }
-        const res = await Promise.race([
-          this.runRefine(llm, task, route, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
-          }),
-        ])
-        if (res && res.text.length > 0) {
-          pool.succeeded(ref)
-          this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
-            input: res.inputTokens,
-            output: estimateTokens(res.text),
-          })
-          return
+      let succeeded = false
+      for (let variant = 0; variant < tries && !succeeded; variant++) {
+        const attempt = pool.attemptsOf(ref)
+        try {
+          const route: RefineRoute = { provider: ref.provider, model: ref.model }
+          const res = await Promise.race([
+            this.runRefine(llm, task, route, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, attempt),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
+            }),
+          ])
+          if (res && res.text.length > 0) {
+            pool.succeeded(ref)
+            this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
+              input: res.inputTokens,
+              output: estimateTokens(res.text),
+            })
+            succeeded = true
+          }
+        } catch (error) {
+          lastReason = error instanceof Error ? error.message : String(error)
+          pool.noteAttempt(ref) // 下次这个模型带 reasoningEffort 再试
+          // 同一模型的第二次尝试不写失败统计（那是"自动开关"的一次拨动，不是模型不可用）
+          if (variant === tries - 1) {
+            const delay = pool.failed(ref)
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[dsh-think-summary] refine attempt failed, backing off:',
+              formatModelRef(ref),
+              lastReason,
+              '退避 ' + delay + 'ms',
+              '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
+            )
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[dsh-think-summary] refine 切换思考开关重试:',
+              formatModelRef(ref),
+              lastReason,
+            )
+          }
+        } finally {
+          if (timer !== undefined) { clearTimeout(timer); timer = undefined }
         }
-      } catch (error) {
-        lastReason = error instanceof Error ? error.message : String(error)
-        const delay = pool.failed(ref)
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[dsh-think-summary] refine attempt failed, backing off:',
-          formatModelRef(ref),
-          lastReason,
-          '退避 ' + delay + 'ms',
-          '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
-        )
-      } finally {
-        if (timer !== undefined) clearTimeout(timer)
-        pool.release(ref)
       }
+      pool.release(ref)
+      if (succeeded) return
     }
 
     // 本轮尝试全失败：写回原因，并在退避到期后**有限次**重投（由 totalBudget 兜底）
@@ -705,6 +724,7 @@ export class RefineQueue {
     route: RefineRoute,
     maxInputTokens: number,
     outputTokens: number,
+    attempt = 0,
   ): Promise<{ text: string; inputTokens: number }> {
     // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；system 走顶层字段。
     const trimMode = this.getOptions().trim
@@ -715,7 +735,7 @@ export class RefineQueue {
           ? task.text
           : headTailTrim(task.text, maxInputTokens)
     const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
-      REFINE_USER_TEMPLATE.replace('{text}', inputText))
+      REFINE_USER_TEMPLATE.replace('{text}', inputText), attempt)
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }
@@ -725,13 +745,18 @@ export class RefineQueue {
    *
    * `maxTokens` 必须先收敛：llm 会把它原样发给供应商，各家各有合法区间
    * （商汤：`field MaxTokens invalid, should be in [1, 384000]`）。
-   * `reasoningEffort: 'off'` 只在**配置开启且该模型确实声明 off 档位**时发送：
-   * 未声明就发会被 llm 直接拒绝，把本来可用的路由打挂。
+   *
+   * **自动开关思考**（`attempt`）：同一个模型的第 1 次尝试**不带** `reasoningEffort`
+   * （先按供应商默认），失败重试时才带 `reasoningEffort: 'off'`——这样既不必
+   * 用户为每个模型猜"能不能关思考"，又能在"没关思考导致预算被推理耗尽"时自动救回来。
+   * 仍然叠加 `canDisableReasoning` 兜底：模型没声明 off 档位时绝不发送
+   * （llm 对未声明档位直接抛错，发了会把本来可用的路由打挂）。
    * @param llm - llm 服务。
    * @param route - 解析后的 provider/model。
    * @param outputTokens - 用户配置的输出预算。
    * @param system - system 提示词。
    * @param userText - user 消息正文。
+   * @param attempt - 该模型本轮第几次尝试（从 0 起）；>0 才尝试关思考。
    * @returns 模型流。
    */
   private async buildRequest(
@@ -740,13 +765,13 @@ export class RefineQueue {
     outputTokens: number,
     system: string,
     userText: string,
+    attempt = 0,
   ): Promise<AsyncIterable<{ type?: string; text?: string }>> {
     const o = this.getOptions()
+    const wantOff = shouldDisableReasoning(o.disableReasoning === true, attempt)
     const [cap, canOff] = await Promise.all([
       resolveOutputCap(llm, route.provider, route.model),
-      o.disableReasoning === true
-        ? canDisableReasoning(llm, route.provider, route.model)
-        : Promise.resolve(false),
+      wantOff ? canDisableReasoning(llm, route.provider, route.model) : Promise.resolve(false),
     ])
     return llm.stream({
       provider: route.provider,
@@ -754,7 +779,7 @@ export class RefineQueue {
       maxTokens: clampOutputTokens(outputTokens, cap),
       // 摘要任务要稳定：不要采样发散（温度 0）
       temperature: 0,
-      // 只在该模型声明了 off 档位时发送（见 canDisableReasoning）
+      // 自动开关：首次不带，重试时带（且仅在该模型声明了 off 档位时）
       ...canOff ? { reasoningEffort: 'off' } : {},
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],

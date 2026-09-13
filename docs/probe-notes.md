@@ -292,3 +292,50 @@ pi-ai 的 `describableReasoningLevel` 注释写明：`off` 会被翻译成**省�
 配置形状取舍：设置页存的是 **`"provider/model"` 字符串数组**（`refineModels`），
 因为设置桥是逐字段 `set`，直接存 JSON 值最省事；气泡显示时只取斜杠后的模型名，
 完整值放 `title` 悬停。池子为空则回退原来的 `refineProvider`/`refineModel` 单模型路径。
+
+### 8.7 自动开关思考重试（避免"关不掉思考"死局）
+
+§8.2 的结论是"模型没声明 `off` 档位就别发 `reasoningEffort`"。但这样一来
+**能关的关了、不能关的没关**，用户没法统一配置。改成**自动开关**：
+
+- 同一模型的**第 1 次尝试不带** `reasoningEffort`（先按供应商默认跑）；
+- 失败后**第 2 次尝试带上**（`shouldDisableReasoning(disable, attempt>0)`）——
+  "没关思考导致预算被推理烧光"的模型因此能自己救回来；
+- 仍叠加 `canDisableReasoning` 兜底：模型没声明 off 档位时**绝不发送**
+  （llm 对未声明档位直接抛错，发了会把可用路由打挂）。
+
+注意：该模型第二次尝试**不写失败统计**——那是"自动开关"的一次拨动，不是模型不可用，
+否则气泡状态色会把可用模型误判成红。
+
+### 8.8 气泡状态色（跨进程持久化）
+
+`~/.dsh/dsh-think-summary-pool.json`（与思考总结分开，原子写）累计每个模型的
+`{ok, fail}`，设置页气泡按成功率上色：
+
+| 档位 | 条件 | 显示 |
+|---|---|---|
+| 绿 | 成功率 ≥50% | 绿点 + 绿边框 |
+| 黄 | <50% 但成功过 | 黄点 + 黄边框 |
+| 红 | 一次都没成功过 | 红点 + 红边框（气泡降透明度） |
+| 不显示 | 总尝试 <5 次 | 空心灰点 |
+
+**必须跨进程累计**：单次运行内样本太少，"一次没成功过"重启就清零的话永远显示不出红/绿。
+写盘合并到 1s 一次（一个思考几十段，逐次同步写会拖慢精炼）。
+
+### 8.9 逐个实测筛掉不可用模型
+
+`/v1/models` **会列出实际打不通的模型**——本次踩到两次
+（商汤 `sensenova-6.7-flash-lite`、NVIDIA `nemotron-70b` 都在目录里但 chat 404）。
+所以筛模型必须**逐个发真实 chat 请求**：
+
+| 模型 | 实测 |
+|---|---|
+| `nvidia/nvidia/llama-3.1-nemotron-70b-instruct` | chat **404**（历史失败记录里 56 次） |
+| `nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1` | chat **404** |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | 挂死无响应（HTTP 000） |
+| `nvidia/meta/llama-3.2-90b-vision-instruct` | 挂死无响应 |
+| `nvidia/poolside/laguna-xs-2.1` | **503** ResourceExhausted（长期排队） |
+| `meta/llama-3.2-11b-vision-instruct` / `90b` | 视觉模型，做文本摘要不合适 |
+| 其余 8 个（商汤 2 + NVIDIA 6） | 200，保留 |
+
+池子从 14 个精简到 **8 个**（全是实测可用的）。

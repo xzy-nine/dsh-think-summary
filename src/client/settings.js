@@ -211,6 +211,8 @@ function makeSettingsCard(scope) {
     const [groupOpen, setGroupOpen] = React.useState({})
     // 模型池的"待添加"选择（供应商 + 模型），点「添加」才进池子
     const [poolDraft, setPoolDraft] = React.useState({ provider: '', model: '' })
+    // 每个模型的累计成功/失败（气泡状态色；Host 侧跨进程持久化）
+    const [poolStats, setPoolStats] = React.useState({})
 
     // 加载精炼供应商/模型下拉数据（/models 路由：providers + 各自的模型目录）
     React.useEffect(() => {
@@ -231,6 +233,31 @@ function makeSettingsCard(scope) {
       }
       void load()
       return () => { alive = false }
+    }, [])
+
+    // 加载模型池统计（状态色）。打开设置卡时取一次 + 每 10s 刷新：
+    // 精炼是后台持续跑的，停留在这个页面时也能看到颜色变化。
+    React.useEffect(() => {
+      let alive = true
+      let timer = null
+      const poll = async () => {
+        try {
+          const response = await fetch(POOL_STATS_ROUTE)
+          if (response.ok) {
+            const json = await response.json()
+            if (alive && json && json.ok === true && json.stats && typeof json.stats === 'object') setPoolStats(json.stats)
+          }
+        } catch {
+          /* 统计不可用：气泡不显示颜色 */
+        } finally {
+          if (alive) timer = setTimeout(poll, 10000)
+        }
+      }
+      void poll()
+      return () => {
+        alive = false
+        if (timer !== null) clearTimeout(timer)
+      }
     }, [])
 
     React.useEffect(() => {
@@ -429,8 +456,19 @@ function makeSettingsCard(scope) {
                 const slash = text.indexOf('/')
                 // 气泡上只留模型名；没有斜杠就原样显示（容错：设置文件可能被手改）
                 const short = slash > 0 && slash < text.length - 1 ? text.slice(slash + 1) : text
+                // 状态色：绿=成功率≥50%，黄=<50% 但成功过，红=一次没成功过
+                // （尝试数 <5 时"unknown"，不显示颜色；统计跨进程持久化）
+                const stat = poolStats[text]
+                const health = poolHealth(stat)
+                const statNote = poolHealthTitle(stat)
+                const chipTitle = statNote !== '' ? text + '\n' + statNote : text
                 return React.createElement(
-                  'span', { key: text + ':' + index, className: 'ts-pool-chip', title: text },
+                  'span', {
+                    key: text + ':' + index,
+                    className: 'ts-pool-chip' + (health === 'unknown' ? '' : ' ts-pool-chip--' + health),
+                    title: chipTitle,
+                  },
+                  React.createElement('span', { className: 'ts-pool-chip-dot', 'data-health': health, 'aria-hidden': 'true' }),
                   React.createElement('span', { className: 'ts-pool-chip-text' }, short),
                   React.createElement('button', {
                     type: 'button', className: 'ts-pool-chip-del',

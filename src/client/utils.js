@@ -55,6 +55,46 @@ function shortErr(reason) {
   return oneLine.length > 40 ? oneLine.slice(0, 40) + '…' : oneLine
 }
 
+/** 显示模型状态色所需的最少尝试次数（与 Host 侧 pool-stats.ts 保持一致）。 */
+const POOL_MIN_ATTEMPTS = 5
+
+/**
+ * 模型健康档位（设置页气泡状态色）。
+ *
+ * 规则与 Host 侧 `healthOf` 一致（两处都改要同步）：
+ *  - 总尝试 <5 次 → `unknown`（不显示颜色，样本太少）；
+ *  - 成功率 ≥50% → `green`；
+ *  - <50% 但成功过 → `yellow`；
+ *  - 一次没成功过 → `red`。
+ * @param stat - `{ok, fail}` 累计统计；未记录时 undefined。
+ * @returns 'green' | 'yellow' | 'red' | 'unknown'。
+ */
+function poolHealth(stat) {
+  if (!stat || typeof stat !== 'object') return 'unknown'
+  const ok = Number(stat.ok) > 0 ? Math.floor(Number(stat.ok)) : 0
+  const fail = Number(stat.fail) > 0 ? Math.floor(Number(stat.fail)) : 0
+  const total = ok + fail
+  if (total < POOL_MIN_ATTEMPTS) return 'unknown'
+  if (ok === 0) return 'red'
+  return ok / total >= 0.5 ? 'green' : 'yellow'
+}
+
+/**
+ * 状态色的悬停说明（含成功/失败次数与成功率）。
+ * @param stat - `{ok, fail}` 累计统计。
+ * @returns 悬停文案；无样本时为空串。
+ */
+function poolHealthTitle(stat) {
+  if (!stat || typeof stat !== 'object') return ''
+  const ok = Number(stat.ok) > 0 ? Math.floor(Number(stat.ok)) : 0
+  const fail = Number(stat.fail) > 0 ? Math.floor(Number(stat.fail)) : 0
+  const total = ok + fail
+  if (total === 0) return ''
+  const pct = Math.round((ok / total) * 100)
+  const base = '成功 ' + ok + ' / 失败 ' + fail + '（成功率 ' + pct + '%）'
+  return total < POOL_MIN_ATTEMPTS ? base + ' · 样本不足 ' + total + '/' + POOL_MIN_ATTEMPTS : base
+}
+
 /** 段状态：主模型小结 → 小结标签；代码段/表格段 → 结构化摘要（未精炼）；未精炼原因 → 原因标签；待精炼 → 待精炼；已精炼 → 已精炼。 */
 function segStatus(s) {
   if (s && s.kind === 'self') return { cls: 'ts-seg-self', label: '思考小结' }

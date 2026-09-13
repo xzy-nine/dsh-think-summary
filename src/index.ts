@@ -8,6 +8,7 @@ import { installSelfSummaryPrompt } from './host/self-summary.js'
 import { installPersist } from './host/persist.js'
 import { createTodoTranslator } from './host/todo.js'
 import { ModelPoolManager, parseModelPool } from './host/pool.js'
+import { PoolStats } from './host/pool-stats.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
 import {
   resolveConfig,
@@ -97,9 +98,12 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
 
   // 模型池：**精炼与任务翻译共用同一个**，这样两者才会真正互相轮转，
   // 且一个模型的退避对两者同时生效（否则翻译会绕过精炼的退避继续打同一个模型）。
+  // 统计跨进程持久化——气泡状态色要跨重启累计才有意义（否则永远显示不出红/绿）。
+  const poolStats = new PoolStats()
   const pools = new ModelPoolManager(
     () => parseModelPool(getConfig().refineModels),
     () => getConfig().poolPerModelConcurrency ?? 1,
+    poolStats,
   )
 
   const refine = new RefineQueue(
@@ -194,7 +198,11 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   installDetect(ctx, store, () => getConfig(), refine)
   const todoTranslate = createTodoTranslator(() => getConfig(), () => ctx.get('llm') as LlmLike | undefined, defaultModel, pools)
   refine.usePool(pools)
-  installRpc(ctx, store, () => getConfig(), refine, defaultModel, (contents, sessionId) => todoTranslate.translate(contents, sessionId))
+  installRpc(
+    ctx, store, () => getConfig(), refine, defaultModel,
+    (contents, sessionId) => todoTranslate.translate(contents, sessionId),
+    () => poolStats.all(),
+  )
   installSettingsRpc(ctx)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)
 

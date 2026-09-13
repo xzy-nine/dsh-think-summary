@@ -180,6 +180,16 @@ const PANEL_CSS = `
 .ts-pool-empty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .ts-pool-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:2px 4px 2px 10px;font-size:12px;line-height:18px}
 .ts-pool-chip-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 状态色小圆点：绿=成功率≥50%，黄=<50% 但成功过，红=一次没成功过；
+   样本不足（<5 次）时不显示颜色（点变空心灰，不误导） */
+.ts-pool-chip-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed)}
+.ts-pool-chip-dot[data-health="green"]{background:var(--dsw-alias-state-success-primary)}
+.ts-pool-chip-dot[data-health="yellow"]{background:var(--dsw-alias-state-warn-primary)}
+.ts-pool-chip-dot[data-health="red"]{background:var(--dsw-alias-state-error-primary)}
+.ts-pool-chip-dot[data-health="unknown"]{background:0 0;border:1px solid var(--dsw-alias-label-dimmed)}
+.ts-pool-chip--green{border-color:var(--dsw-alias-state-success-primary)}
+.ts-pool-chip--yellow{border-color:var(--dsw-alias-state-warn-primary)}
+.ts-pool-chip--red{border-color:var(--dsw-alias-state-error-primary);opacity:.7}
 .ts-pool-chip-del{appearance:none;cursor:pointer;flex:none;width:18px;height:18px;border:0;border-radius:50%;background:0 0;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:16px;padding:0;transition:color .12s,background-color .12s}
 .ts-pool-chip-del:hover:not(:disabled){color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .ts-pool-chip-del:disabled{opacity:.4;cursor:default}

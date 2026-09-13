@@ -35,8 +35,9 @@ interface PoolEntry {
   /** 累计成功/失败（诊断用）。 */
   succeeded: number
   failed: number
+  /** 该模型在本轮任务里已尝试次数（自动开关思考的重试计数）。 */
+  attempts: number
 }
-
 /** 池子选项。 */
 export interface ModelPoolOptions {
   /** **每个模型**的并发上限（免费模型建议 1）。 */
@@ -47,6 +48,16 @@ export interface ModelPoolOptions {
   backoffMaxMs: number
   /** 取当前时间（测试可注入）。 */
   now?: () => number
+  /** 跨进程累计统计（气泡状态色用；不传则只做内存计数）。 */
+  stats?: PoolStatsLike
+}
+
+/** 统计口的窄接口（避免 pool.ts 依赖 pool-stats 的具体实现）。 */
+export interface PoolStatsLike {
+  /** 记一次成功。 */
+  recordOk(key: string): void
+  /** 记一次失败。 */
+  recordFail(key: string): void
 }
 
 /** 池子的只读快照（诊断/测试用）。 */
@@ -71,6 +82,24 @@ export const POOL_DEFAULTS = {
   backoffBaseMs: 2000,
   backoffMaxMs: 60_000,
 } as const
+
+/**
+ * 该模型这次是否要**关掉思考**（`reasoningEffort: 'off'`）。
+ *
+ * 自动开关重试的核心：用户开着「关闭思考」但某个模型不认这个字段时，
+ * 第一次尝试不带它、失败后再带它试一次（或反过来），即可自动适配两种供应商，
+ * 不需要用户为每个模型手配。规则：
+ *  - 配置关闭 → 永不发送；
+ *  - 第 1 次尝试（attempt 0）→ 不带（保守：先按供应商默认跑）；
+ *  - 之后 → 带（上次失败可能正是因为"没关思考导致预算被推理耗尽"）。
+ * @param disableReasoning - 配置是否要求关思考。
+ * @param attempt - 本次是该模型的第几次尝试（从 0 起）。
+ * @returns 是否发送 `reasoningEffort`。
+ */
+export function shouldDisableReasoning(disableReasoning: boolean, attempt: number): boolean {
+  if (!disableReasoning) return false
+  return attempt > 0
+}
 
 /**
  * 解析池子配置项：接受 `provider/model` 字符串数组（也容忍 `{provider,model}` 对象）。
@@ -127,17 +156,19 @@ export class ModelPool {
   private readonly backoffBase: number
   private readonly backoffMax: number
   private readonly now: () => number
+  private readonly stats: PoolStatsLike | undefined
 
   /**
    * @param refs - 模型清单（空池子表示"未配置"）。
    * @param options - 并发与退避参数。
    */
   constructor(refs: readonly ModelRef[], options: ModelPoolOptions) {
-    this.entries = refs.map((ref) => ({ ref, inFlight: 0, blockedUntil: 0, failures: 0, succeeded: 0, failed: 0 }))
+    this.entries = refs.map((ref) => ({ ref, inFlight: 0, blockedUntil: 0, failures: 0, succeeded: 0, failed: 0, attempts: 0 }))
     this.perModel = Math.max(1, Math.floor(options.perModelConcurrency))
     this.backoffBase = Math.max(0, options.backoffBaseMs)
     this.backoffMax = Math.max(this.backoffBase, options.backoffMaxMs)
     this.now = options.now ?? (() => Date.now())
+    this.stats = options.stats
   }
 
   /** 池子是否有模型（空池子 → 调用方回退单模型路径）。 */
@@ -190,6 +221,9 @@ export class ModelPool {
     entry.succeeded++
     entry.failures = 0
     entry.blockedUntil = 0
+    // 单次尝试序号归零：下次这个模型又从"不带 reasoningEffort"开始试
+    entry.attempts = 0
+    this.stats?.recordOk(formatModelRef(ref))
   }
 
   /**
@@ -204,7 +238,23 @@ export class ModelPool {
     entry.failures++
     const delay = Math.min(this.backoffBase * Math.pow(2, entry.failures - 1), this.backoffMax)
     entry.blockedUntil = this.now() + delay
+    this.stats?.recordFail(formatModelRef(ref))
     return delay
+  }
+
+  /**
+   * 该模型在本轮任务里已尝试过几次（用于自动开关思考的重试）。
+   * @param ref - 模型引用。
+   * @returns 尝试次数（从 0 起）。
+   */
+  attemptsOf(ref: ModelRef): number {
+    return this.find(ref)?.attempts ?? 0
+  }
+
+  /** 记录该模型又试了一次（自动开关思考据此决定下次是否带 reasoningEffort）。 */
+  noteAttempt(ref: ModelRef): void {
+    const entry = this.find(ref)
+    if (entry) entry.attempts++
   }
 
   /**
@@ -263,10 +313,12 @@ export class ModelPoolManager {
   /**
    * @param getRefs - 实时读取模型清单（设置改动即时生效）。
    * @param getPerModelConcurrency - 实时读取每模型并发。
+   * @param stats - 跨进程累计统计（气泡状态色用；不传则只做内存计数）。
    */
   constructor(
     private readonly getRefs: () => ModelRef[],
     private readonly getPerModelConcurrency: () => number,
+    private readonly stats?: PoolStatsLike,
   ) {}
 
   /** 当前池子（配置变化时重建，退避状态随之重置）。 */
@@ -279,6 +331,7 @@ export class ModelPoolManager {
         perModelConcurrency: perModel,
         backoffBaseMs: POOL_DEFAULTS.backoffBaseMs,
         backoffMaxMs: POOL_DEFAULTS.backoffMaxMs,
+        ...this.stats === undefined ? {} : { stats: this.stats },
       })
       this.key = key
     }

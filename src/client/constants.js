@@ -10,4 +10,5 @@ const MODELS_ROUTE = '/api/think-summary/models'
 const PAUSE_ROUTE = '/api/think-summary/pause'
 const REFINE_ROUTE = '/api/think-summary/refine'
 const TODO_ROUTE = '/api/think-summary/todo-translate'
+const POOL_STATS_ROUTE = '/api/think-summary/pool-stats'
 

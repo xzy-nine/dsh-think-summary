@@ -10,11 +10,14 @@
  *
  * 依赖已构建的 lib/（先跑 `npm run build`）。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary, resolveOutputCap, clampOutputTokens, canDisableReasoning } from '../lib/host/summarize/refine.js'
 import { decideRefine } from '../lib/host/summarize/pipeline.js'
 import { createTodoTranslator } from '../lib/host/todo.js'
-import { ModelPool, ModelPoolManager, parseModelPool, formatModelRef, POOL_DEFAULTS } from '../lib/host/pool.js'
+import { ModelPool, ModelPoolManager, parseModelPool, formatModelRef, POOL_DEFAULTS, shouldDisableReasoning } from '../lib/host/pool.js'
+import { PoolStats, healthOf, MIN_ATTEMPTS_FOR_COLOR } from '../lib/host/pool-stats.js'
 
 let failures = 0
 const check = (name, actual, expected) => {
@@ -432,6 +435,72 @@ function mkPool(refs, perModel = 1) {
 }
 
 check('POOL_DEFAULTS 面向免费模型（每模型 1 并发）', POOL_DEFAULTS.perModelConcurrency, 1)
+
+// ── 10. 自动开关思考：首次不带，重试才带 ─────────────────────────────────────
+check('关思考=关 → 永不发送', [shouldDisableReasoning(false, 0), shouldDisableReasoning(false, 1), shouldDisableReasoning(false, 5)], [false, false, false])
+check('关思考=开 → 首次不带（先按供应商默认）', shouldDisableReasoning(true, 0), false)
+check('关思考=开 → 重试时带上（自动救回"预算被推理烧光"）', [shouldDisableReasoning(true, 1), shouldDisableReasoning(true, 2)], [true, true])
+
+// 池子里的尝试计数驱动上面的开关：成功后退避清零、尝试序号归零
+{
+  const { pool } = mkPool(['st/a'], 1)
+  const a = { provider: 'st', model: 'a' }
+  check('尝试计数从 0 起', pool.attemptsOf(a), 0)
+  pool.noteAttempt(a)
+  pool.noteAttempt(a)
+  check('noteAttempt 累加', pool.attemptsOf(a), 2)
+  pool.succeeded(a)
+  check('成功后尝试计数归零（下次又从"不带"开始）', pool.attemptsOf(a), 0)
+}
+
+// ── 11. 状态色分档（绿/黄/红/不显示） ────────────────────────────────────────
+check('样本不足（<5 次）不显示颜色', [healthOf({ ok: 0, fail: 4 }), healthOf({ ok: 1, fail: 0 })], ['unknown', 'unknown'])
+check('尝试数 = 5 才开始显示：一次没成功 → 红', healthOf({ ok: 0, fail: 5 }), 'red')
+check('成功率 ≥50% → 绿', [healthOf({ ok: 5, fail: 5 }), healthOf({ ok: 9, fail: 1 })], ['green', 'green'])
+check('成功率 <50% 但成功过 → 黄', healthOf({ ok: 1, fail: 9 }), 'yellow')
+check('未记录 → 不显示', [healthOf(undefined), healthOf(null)], ['unknown', 'unknown'])
+check('颜色门槛常量 = 5', MIN_ATTEMPTS_FOR_COLOR, 5)
+
+// ── 12. 统计持久化（跨进程累计，气泡颜色才有意义） ──────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ts-poolstats-'))
+  const s1 = new PoolStats(dir)
+  s1.recordOk('st/a')
+  s1.recordOk('st/a')
+  s1.recordFail('st/a')
+  s1.recordFail('st/b')
+  s1.flush()
+  // 模拟重启：新实例从磁盘恢复
+  const s2 = new PoolStats(dir)
+  check('重启后统计仍在（成功/失败都恢复）', [s2.get('st/a'), s2.get('st/b')], [{ ok: 2, fail: 1 }, { ok: 0, fail: 1 }])
+  check('累计后可判定颜色（3/3 样本不足仍是 unknown）', healthOf(s2.get('st/a')), 'unknown')
+  s2.recordOk('st/a')
+  s2.recordOk('st/a')
+  s2.flush()
+  const s3 = new PoolStats(dir)
+  check('跨实例累计到 5 次后开始显示', healthOf(s3.get('st/a')), 'green')
+  // 损坏文件不阻断启动
+  writeFileSync(join(dir, 'dsh-think-summary-pool.json'), '{ 这不是 JSON', 'utf8')
+  let broken
+  try { broken = new PoolStats(dir) } catch (e) { broken = 'threw: ' + e.message }
+  check('统计文件损坏 → 空统计、不抛异常', [broken instanceof PoolStats, broken.get('st/a')], [true, undefined])
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// 池子把成功/失败喂给统计（气泡颜色真正由精炼结果驱动）
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ts-poolstats2-'))
+  const stats = new PoolStats(dir)
+  const pool = new ModelPool(parseModelPool(['st/a']), {
+    perModelConcurrency: 1, backoffBaseMs: 1000, backoffMaxMs: 8000, stats,
+  })
+  const a = { provider: 'st', model: 'a' }
+  pool.succeeded(a)
+  pool.failed(a)
+  stats.flush()
+  check('池子的 success/fail 会写进统计', new PoolStats(dir).get('st/a'), { ok: 1, fail: 1 })
+  rmSync(dir, { recursive: true, force: true })
+}
 
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
