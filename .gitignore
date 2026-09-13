@@ -2,6 +2,9 @@
 node_modules/
 .npm-cache/
 
+# local memory notes (开发记忆，不纳入版本库)
+memory/
+
 # build output (npm pack 在发布时构建)
 lib/
 *.tsbuildinfo
