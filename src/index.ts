@@ -123,10 +123,13 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   /**
    * 触发第二遍（整体摘要）：把该 think 当前的分段摘要再喂一次模型。
    * 声明在队列之后、只在回调里调用（回调晚于构造执行）。
+   *
+   * **只有 ≥2 段才跑**：只有一段时，整体摘要几乎是那段摘要的复述，纯浪费一次调用
+   * （用户要求）。单段的卡片头部直接用那一段的摘要即可（UI 侧同样不再显示"生成中…"）。
    */
   const scheduleThink = (sessionId: string, thinkId: string): void => {
     const think = store.get(sessionId)?.thinks.find((t) => t.id === thinkId)
-    if (!think || think.segments.length === 0) return
+    if (!think || think.segments.length < 2) return
     const fallback = defaultModelOf()
     refine.enqueueThink({
       sessionId,

@@ -209,9 +209,14 @@ function makeThinkStepCard(official) {
     // 展开状态：手动优先，否则按"最近 2 张展开"的滚动窗口
     const open = manual === null ? autoOpen : manual
     // 第一行常显：整体摘要（第二遍）。还没生成时用最后一段摘要占位（流式期间也有内容看）。
+    // **≥2 段才会跑第二遍**（Host 侧同样判断）：单段的"整体摘要"就是那段摘要的复述，
+    // 所以单段时既不显示"生成中…"，也不会再冒出整体摘要。
+    const needsOverall = segments.length >= 2
     const headline = think.summary
       || (segments.length > 0 ? segments[segments.length - 1].summary : '')
-    const headlineNote = think.summary ? '' : (think.summaryReason ? '整体摘要失败' : '整体摘要生成中…')
+    const headlineNote = think.summary !== undefined || !needsOverall
+      ? ''
+      : (think.summaryReason ? '整体摘要失败' : '整体摘要生成中…')
 
     const retry = async (index) => {
       const key = think.id + ':' + index
