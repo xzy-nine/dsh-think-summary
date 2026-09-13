@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary, resolveOutputCap, clampOutputTokens, canDisableReasoning } from '../lib/host/summarize/refine.js'
 import { decideRefine } from '../lib/host/summarize/pipeline.js'
 import { createTodoTranslator } from '../lib/host/todo.js'
+import { ModelPool, ModelPoolManager, parseModelPool, formatModelRef, POOL_DEFAULTS } from '../lib/host/pool.js'
 
 let failures = 0
 const check = (name, actual, expected) => {
@@ -314,6 +315,123 @@ check('短文案：有码用码', shortErr('精炼失败：st/x error：RATE_LIM
 check('短文案：无码则单行截断（不把整段 JSON 顶到界面）',
   shortErr('精炼失败：' + 'x'.repeat(100)).length <= 41,
   true)
+
+// ── 9. 模型池：解析、轮转、每模型并发、指数退避 ──────────────────────────────
+check('池子解析：字符串 provider/model', parseModelPool(['st/a', 'st/b']), [{ provider: 'st', model: 'a' }, { provider: 'st', model: 'b' }])
+check('池子解析：容忍 {provider,model} 对象', parseModelPool([{ provider: 'x', model: 'y' }]), [{ provider: 'x', model: 'y' }])
+check('池子解析：去空、去重、丢弃无斜杠项、保持顺序',
+  parseModelPool(['st/a', '', '  ', 'st/a', 'noslash', 'st/', '/b', 'st/c']),
+  [{ provider: 'st', model: 'a' }, { provider: 'st', model: 'c' }])
+check('池子解析：非数组 → 空', [parseModelPool(undefined), parseModelPool('st/a'), parseModelPool(null)], [[], [], []])
+
+/** 可控时钟的池子。 */
+function mkPool(refs, perModel = 1) {
+  let t = 0
+  const pool = new ModelPool(parseModelPool(refs), {
+    perModelConcurrency: perModel,
+    backoffBaseMs: 1000,
+    backoffMaxMs: 8000,
+    now: () => t,
+  })
+  return { pool, advance: (ms) => { t += ms }, at: () => t }
+}
+
+// 轮转：3 个模型应依次取用，而不是盯着第一个
+{
+  const { pool } = mkPool(['st/a', 'st/b', 'st/c'])
+  const seq = []
+  for (let i = 0; i < 6; i++) {
+    const ref = pool.pick()
+    seq.push(formatModelRef(ref))
+    pool.acquire(ref)
+    pool.release(ref)
+  }
+  check('轮转：多模型依次取用（a,b,c,a,b,c）', seq, ['st/a', 'st/b', 'st/c', 'st/a', 'st/b', 'st/c'])
+}
+
+// 每模型并发：perModel=1 时同一模型不能同时占两个位
+{
+  const { pool } = mkPool(['st/a', 'st/b'], 1)
+  const first = pool.pick()
+  pool.acquire(first)
+  const second = pool.pick()
+  check('每模型并发=1：第一个占满后轮到另一个模型', formatModelRef(second), 'st/b')
+  pool.acquire(second)
+  check('每模型并发=1：都占满后没有可取模型', pool.pick(), undefined)
+  pool.release(first)
+  check('释放后重新可取', formatModelRef(pool.pick()), 'st/a')
+}
+
+// 每模型并发=2：同一模型可占两个位
+{
+  const { pool } = mkPool(['st/a'], 2)
+  const one = pool.pick(); pool.acquire(one)
+  const two = pool.pick()
+  check('每模型并发=2：同一模型可占两位', [formatModelRef(one), formatModelRef(two)], ['st/a', 'st/a'])
+  pool.acquire(two)
+  check('每模型并发=2：占满两位后不可再取', pool.pick(), undefined)
+}
+
+// 指数退避：失败后该模型被跳过，其他模型顶上；退避按 1s→2s→4s 增长
+{
+  const { pool, advance } = mkPool(['st/a', 'st/b'], 1)
+  const a = { provider: 'st', model: 'a' }
+  const b = { provider: 'st', model: 'b' }
+  const d1 = pool.failed(a)
+  check('退避：首次失败 1000ms', d1, 1000)
+  check('退避：失败的模型被跳过，另一个顶上', formatModelRef(pool.pick()), 'st/b')
+  const d2 = pool.failed(a)
+  check('退避：连续失败按指数增长（2000ms）', d2, 2000)
+  const d3 = pool.failed(a)
+  check('退避：再翻倍（4000ms）', d3, 4000)
+  const d4 = pool.failed(a)
+  check('退避：再翻倍（8000ms，正好到上限）', d4, 8000)
+  // 退避到上限后不再增长
+  check('退避：封顶 8000ms', pool.failed(a), 8000)
+  // 时间推进：退避到期后该模型恢复可被取用
+  const { pool: p2, advance: adv2 } = mkPool(['st/a'], 1)
+  p2.failed({ provider: 'st', model: 'a' })
+  check('退避中：不可取用', p2.pick(), undefined)
+  adv2(1001)
+  check('退避到期：恢复可取用', formatModelRef(p2.pick()), 'st/a')
+  void advance
+  void b
+}
+
+// 成功清零退避等级
+{
+  const { pool } = mkPool(['st/a'], 1)
+  const a = { provider: 'st', model: 'a' }
+  pool.failed(a)
+  pool.succeeded(a)
+  check('成功后退避等级清零（下次失败重新从 1000ms 起）', pool.failed(a), 1000)
+}
+
+// nextWakeMs：告诉调用方还要等多久（用于安排重试），有可用模型时为 0
+{
+  const { pool } = mkPool(['st/a', 'st/b'], 1)
+  check('有可用模型时无需等待', pool.nextWakeMs(), 0)
+  pool.failed({ provider: 'st', model: 'a' })
+  check('还有另一个模型可用 → 仍无需等待', pool.nextWakeMs(), 0)
+  pool.failed({ provider: 'st', model: 'b' })
+  check('全部退避 → 返回最早到期时间', pool.nextWakeMs(), 1000)
+}
+
+// 池子管理器：配置变化才重建（退避状态随之重置）
+{
+  let refs = ['st/a']
+  let perModel = 1
+  const mgr = new ModelPoolManager(() => parseModelPool(refs), () => perModel)
+  const first = mgr.current()
+  check('管理器：配置未变时复用同一池子', mgr.current() === first, true)
+  refs = ['st/a', 'st/b']
+  check('管理器：模型清单变化则重建', mgr.current() !== first, true)
+  const third = mgr.current()
+  perModel = 2
+  check('管理器：每模型并发变化也重建', mgr.current() !== third, true)
+}
+
+check('POOL_DEFAULTS 面向免费模型（每模型 1 并发）', POOL_DEFAULTS.perModelConcurrency, 1)
 
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

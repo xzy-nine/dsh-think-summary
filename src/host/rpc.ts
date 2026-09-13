@@ -8,7 +8,7 @@ import type { ThinkSummaryConfig } from './config.js'
  * 响应里，用来确认运行中的宿主究竟加载了哪一版代码（Host 模块被 ESM 缓存，
  * 补丁热重载只重建行、不重新 import 依赖，改 Host 代码必须重启 dsh）。
  */
-export const BUILD = '2026-09-13-error-code-display'
+export const BUILD = '2026-09-13-model-pool'
 
 /** llm 服务的最小可用面（与 refine.ts 对齐，防御性类型）。 */
 interface LlmLike {

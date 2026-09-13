@@ -15,11 +15,22 @@ const FIELD_GROUPS = [
     caption: '精炼模型',
     fields: [
       { key: 'refineEnabled', label: '精炼', kind: 'bool', hint: '开启后用所选模型给每个分段写摘要' },
-      { key: 'refineProvider', label: '供应商', kind: 'provider', hint: 'auto = 跟随主请求供应商；或手动指定任一已注册供应商（可选用其他供应商的模型）' },
-      { key: 'refineModel', label: '模型', kind: 'model', hint: 'auto = 所选供应商目录中上下文窗口最小的可用模型；或从列表固定指定' },
-      { key: 'refineConcurrency', label: '并发', kind: 'num', unit: '', hint: '并行精炼数；本地模型建议 1–2' },
+      {
+        key: 'refineModels', label: '模型池', kind: 'pool',
+        hint: '添加多个「供应商/模型」，摘要与翻译**轮流**取用；每模型各自并发、失败自动退避并由其他模型顶上（免费模型建议多加几个）',
+      },
+      { key: 'poolPerModelConcurrency', label: '每模型并发', kind: 'num', unit: '', hint: '每个模型各自的并发上限；免费模型普遍限流，填 1 最稳' },
+      { key: 'poolMaxAttempts', label: '换模型重试', kind: 'num', unit: '轮', hint: '单个任务最多试几轮（每轮可能换一个模型）；全失败才写回错误' },
       { key: 'refineTimeout', label: '超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死的任务超时放弃并释放并发位' },
-      { key: 'refineDisableReasoning', label: '关闭思考', kind: 'bool', hint: '精炼请求带 reasoningEffort=off，省掉推理开销；只在该模型声明了 off 档位时发送（供应商需 compat.supportsReasoningEffort: true + 模型 reasoningEfforts.off），否则静默不发' },
+      { key: 'refineDisableReasoning', label: '关闭思考', kind: 'bool', hint: '请求带 reasoningEffort=off，省掉推理开销；只在该模型声明了 off 档位时发送（供应商需 compat.supportsReasoningEffort: true + 模型 reasoningEfforts.off），否则静默不发' },
+    ],
+  },
+  {
+    caption: '单模型回退（模型池为空时用）',
+    fields: [
+      { key: 'refineProvider', label: '供应商', kind: 'provider', hint: 'auto = 跟随主请求供应商；模型池非空时此项被忽略' },
+      { key: 'refineModel', label: '模型', kind: 'model', hint: 'auto = 所选供应商目录中上下文窗口最小的可用模型；模型池非空时此项被忽略' },
+      { key: 'refineConcurrency', label: '并发', kind: 'num', unit: '', hint: '单模型模式下的并行精炼数；模型池模式改用「每模型并发」× 模型数' },
     ],
   },
   {
@@ -198,6 +209,8 @@ function makeSettingsCard(scope) {
     const [currentModel, setCurrentModel] = React.useState('')
     // 分组折叠状态：默认全部折叠
     const [groupOpen, setGroupOpen] = React.useState({})
+    // 模型池的"待添加"选择（供应商 + 模型），点「添加」才进池子
+    const [poolDraft, setPoolDraft] = React.useState({ provider: '', model: '' })
 
     // 加载精炼供应商/模型下拉数据（/models 路由：providers + 各自的模型目录）
     React.useEffect(() => {
@@ -236,9 +249,16 @@ function makeSettingsCard(scope) {
         next.enabled = v.enabled === undefined ? true : !!v.enabled
         for (const group of FIELD_GROUPS) {
           for (const f of group.fields) {
-            next[f.key] = f.kind === 'bool'
-              ? (v[f.key] === undefined ? true : !!v[f.key])
-              : (v[f.key] === undefined ? (b[f.key] === undefined ? '' : String(b[f.key])) : String(v[f.key]))
+            if (f.kind === 'bool') {
+              next[f.key] = v[f.key] === undefined ? true : !!v[f.key]
+            } else if (f.kind === 'pool') {
+              // 模型池：数组原样保留（空数组 = 未配置 → 走单模型回退）
+              next[f.key] = Array.isArray(v[f.key]) ? v[f.key].slice() : []
+            } else {
+              next[f.key] = v[f.key] === undefined
+                ? (b[f.key] === undefined ? '' : String(b[f.key]))
+                : String(v[f.key])
+            }
           }
         }
         setDraft(next)
@@ -280,6 +300,11 @@ function makeSettingsCard(scope) {
                 return
               }
               await scope.set(f.key, n)
+            } else if (f.kind === 'pool') {
+              // 空数组就 unset（回默认 []），保持设置文件干净
+              const list = Array.isArray(draft[f.key]) ? draft[f.key] : []
+              if (list.length === 0) await scope.unset(f.key)
+              else await scope.set(f.key, list)
             } else {
               const t = (draft[f.key] || '').trim()
               if (t === '') await scope.unset(f.key)
@@ -304,7 +329,10 @@ function makeSettingsCard(scope) {
       setMsgKind('')
       try {
         await scope.unset('enabled')
-        for (const group of FIELD_GROUPS) for (const f of group.fields) await scope.unset(f.key)
+        for (const group of FIELD_GROUPS) for (const f of group.fields) {
+          // 数组字段：unset 即可回到默认 []（scope.unset 不能传数组）
+          await scope.unset(f.key)
+        }
         setMsgKind('ok')
         setMsg('已恢复默认')
         setSeed((s) => s + 1)
@@ -388,6 +416,76 @@ function makeSettingsCard(scope) {
             className: 'ts-set-textarea', rows: 3, value: value ?? '',
             disabled, title: f.hint, onChange: (e) => setField(f.key, e.target.value),
           })
+        } else if (f.kind === 'pool') {
+          // 模型池：每个已添加的模型一个气泡（**只显示模型名**，完整
+          // `供应商/模型` 放悬停提示），右侧 × 移除；下面一行是"供应商 + 模型 + 添加"。
+          const list = Array.isArray(value) ? value : []
+          const chips = React.createElement(
+            'div', { className: 'ts-pool-chips' },
+            list.length === 0
+              ? React.createElement('span', { className: 'ts-pool-empty' }, '未添加模型（将回退下面的单模型设置）')
+              : list.map((entry, index) => {
+                const text = String(entry)
+                const slash = text.indexOf('/')
+                // 气泡上只留模型名；没有斜杠就原样显示（容错：设置文件可能被手改）
+                const short = slash > 0 && slash < text.length - 1 ? text.slice(slash + 1) : text
+                return React.createElement(
+                  'span', { key: text + ':' + index, className: 'ts-pool-chip', title: text },
+                  React.createElement('span', { className: 'ts-pool-chip-text' }, short),
+                  React.createElement('button', {
+                    type: 'button', className: 'ts-pool-chip-del',
+                    disabled, title: '移除该模型',
+                    onClick: () => setField(f.key, list.filter((_, i) => i !== index)),
+                  }, '×'),
+                )
+              }),
+          )
+          const pickerProvider = poolDraft.provider || (providers[0] && providers[0].id) || ''
+          const pickerModels = Array.isArray(modelsByProvider[pickerProvider]) ? modelsByProvider[pickerProvider] : []
+          const pickerModel = pickerModels.includes(poolDraft.model) ? poolDraft.model : (pickerModels[0] || '')
+          control = React.createElement(
+            React.Fragment, null,
+            chips,
+            React.createElement(
+              'div', { className: 'ts-pool-add' },
+              React.createElement(
+                'select',
+                {
+                  className: 'ts-set-input', value: pickerProvider, disabled, title: '选择供应商',
+                  onChange: (e) => setPoolDraft((d) => ({ ...d, provider: e.target.value, model: '' })),
+                },
+                providers.length === 0
+                  ? React.createElement('option', { value: '' }, '（无可用供应商）')
+                  : providers.map((p) => React.createElement('option', { key: p.id, value: p.id }, p.id + (p.name && p.name !== p.id ? '（' + p.name + '）' : ''))),
+              ),
+              React.createElement(
+                'select',
+                {
+                  className: 'ts-set-input', value: pickerModel, disabled, title: '选择模型',
+                  onChange: (e) => setPoolDraft((d) => ({ ...d, model: e.target.value })),
+                },
+                pickerModels.length === 0
+                  ? React.createElement('option', { value: '' }, '（无可用模型）')
+                  : pickerModels.map((m) => React.createElement('option', { key: m, value: m }, m)),
+              ),
+              React.createElement(
+                'button',
+                {
+                  type: 'button', className: 'ts-pool-add-btn',
+                  disabled: disabled || pickerProvider === '' || pickerModel === '',
+                  title: '把该模型加入池子',
+                  onClick: () => {
+                    if (pickerProvider === '' || pickerModel === '') return
+                    const ref = pickerProvider + '/' + pickerModel
+                    if (list.includes(ref)) return // 去重：同一个模型不加两次
+                    setField(f.key, list.concat([ref]))
+                  },
+                },
+                '添加',
+              ),
+            ),
+            React.createElement('p', { className: 'ts-set-hint' }, '已添加 ' + list.length + ' 个模型：摘要与翻译轮流取用，各自独立并发与退避'),
+          )
         } else if (f.kind === 'enum') {
           control = React.createElement(
             'select',

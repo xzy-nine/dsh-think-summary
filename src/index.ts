@@ -7,6 +7,7 @@ import { installFallback } from './host/fallback.js'
 import { installSelfSummaryPrompt } from './host/self-summary.js'
 import { installPersist } from './host/persist.js'
 import { createTodoTranslator } from './host/todo.js'
+import { ModelPoolManager, parseModelPool } from './host/pool.js'
 import { RefineQueue, type LlmLike } from './host/summarize/refine.js'
 import {
   resolveConfig,
@@ -45,6 +46,15 @@ const Config = z.object({
    * 明确失败——静默沿用供应商默认会让默认思考的模型继续烧预算。
    */
   refineDisableReasoning: z.boolean().default(true),
+  /**
+   * 精炼模型池：`"provider/model"` 字符串数组（多模型轮转）。
+   * 非空时摘要与翻译轮流从池子里取模型，并发按每模型计算。
+   */
+  refineModels: z.array(z.string()).default([]),
+  /** 每个模型的并发上限（池子模式；免费模型建议 1）。 */
+  poolPerModelConcurrency: z.number().default(1),
+  /** 单个精炼任务在池子里的最大尝试轮数（每轮可能换模型）。 */
+  poolMaxAttempts: z.number().default(3),
   /** 精炼最小段（token）：0 = 每个段都精炼（默认）。 */
   refineMinTokens: z.number().default(0),
   /** 'auto' = 跟随主请求 provider；或显式 provider id（可跨供应商精炼）。 */
@@ -85,6 +95,13 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   let getConfig: () => ThinkSummaryConfig = () => resolveConfig(config)
   const store = new ThinkStateStore()
 
+  // 模型池：**精炼与任务翻译共用同一个**，这样两者才会真正互相轮转，
+  // 且一个模型的退避对两者同时生效（否则翻译会绕过精炼的退避继续打同一个模型）。
+  const pools = new ModelPoolManager(
+    () => parseModelPool(getConfig().refineModels),
+    () => getConfig().poolPerModelConcurrency ?? 1,
+  )
+
   const refine = new RefineQueue(
     () => {
       const c = getConfig()
@@ -101,6 +118,8 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
         refineTimeout: c.refineTimeout,
         trim: c.refineTrim,
         disableReasoning: c.refineDisableReasoning,
+        poolPerModelConcurrency: c.poolPerModelConcurrency,
+        poolMaxAttempts: c.poolMaxAttempts,
       }
     },
     () => ctx.get('llm') as LlmLike | undefined,
@@ -173,7 +192,8 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   const defaultModel = defaultModelOf
 
   installDetect(ctx, store, () => getConfig(), refine)
-  const todoTranslate = createTodoTranslator(() => getConfig(), () => ctx.get('llm') as LlmLike | undefined, defaultModel)
+  const todoTranslate = createTodoTranslator(() => getConfig(), () => ctx.get('llm') as LlmLike | undefined, defaultModel, pools)
+  refine.usePool(pools)
   installRpc(ctx, store, () => getConfig(), refine, defaultModel, (contents, sessionId) => todoTranslate.translate(contents, sessionId))
   installSettingsRpc(ctx)
   installFallback(ctx, store, () => getConfig(), refine, defaultModel)

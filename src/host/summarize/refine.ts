@@ -17,6 +17,7 @@ import {
   REFINE_USER_TEMPLATE,
   THINK_USER_TEMPLATE,
 } from '../config.js'
+import { ModelPoolManager, formatModelRef, type ModelPool, type ModelRef } from '../pool.js'
 
 /** 精炼 provider/模型解析结果。 */
 export interface RefineRoute {
@@ -62,7 +63,14 @@ export interface RefineOptions {
    * 避免静默沿用供应商默认（默认思考的供应商会照旧推理并烧掉预算）。
    */
   disableReasoning?: boolean
+  /** 每个模型的并发上限（池子模式；免费模型建议 1）。 */
+  poolPerModelConcurrency?: number
+  /** 单个任务在池子里的最大尝试轮数（每轮可能换一个模型）。 */
+  poolMaxAttempts?: number
 }
+
+/** 单个任务在池子里的默认最大尝试轮数。 */
+export const DEFAULT_POOL_MAX_ATTEMPTS = 3
 
 export interface RefineTask {
   sessionId: string
@@ -75,6 +83,8 @@ export interface RefineTask {
   provider: string
   /** 主请求的 model（auto 解析失败时的兜底）。 */
   fallbackModel: string
+  /** 已尝试轮数（池子模式换模型重投时累加，决定何时放弃）。 */
+  attempts?: number
 }
 
 export interface RefineApply {
@@ -420,6 +430,11 @@ export class RefineQueue {
   private readonly onFail?: RefineFail
   private readonly applyThink?: RefineApplyThink
   private readonly onThinkFail?: RefineFailThink
+  /**
+   * 模型池管理器（由外部注入，便于**与任务翻译共用同一个池子**：
+   * 只有共用，两者才会真正互相轮转、并共享退避状态）。
+   */
+  private pools: ModelPoolManager | undefined
 
   constructor(
     getOptions: () => RefineOptions,
@@ -435,6 +450,14 @@ export class RefineQueue {
     this.onFail = onFail
     this.applyThink = applyThink
     this.onThinkFail = onThinkFail
+  }
+
+  /**
+   * 注入模型池管理器（可选；不注入则走单模型路径）。
+   * @param pools - 与任务翻译共用的池子管理器。
+   */
+  usePool(pools: ModelPoolManager): void {
+    this.pools = pools
   }
 
   /** 门控入队（读实时配置）：精炼开关开（段大小/代码跳过由调用方决定）。 */
@@ -485,9 +508,15 @@ export class RefineQueue {
     return this.thinkQueue.length
   }
 
-  /** 并发水位：有空位就取出任务并行执行；任务结束让出空位并补位。 */
+  /**
+   * 并发水位：有空位就取出任务并行执行；任务结束让出空位并补位。
+   *
+   * 池子模式下的容量 = **模型数 × 每模型并发**：并发不再"对着一个模型压"，
+   * 而是每个模型各自一份额度（免费模型各有限流，正好各用各的）。
+   * 单模型模式仍用 `refineConcurrency`。
+   */
   private pump(): void {
-    const cap = Math.max(1, this.getOptions().refineConcurrency ?? 3)
+    const cap = this.capacity()
     while (this.running < cap && this.queue.length > 0) {
       const task = this.queue.shift()
       if (!task) break
@@ -508,6 +537,16 @@ export class RefineQueue {
     }
   }
 
+  /** 当前总并发上限（池子模式按模型数放大，否则用 refineConcurrency）。 */
+  private capacity(): number {
+    const o = this.getOptions()
+    const pool = this.pools?.current()
+    if (pool !== undefined && pool.size > 0) {
+      return Math.max(1, pool.size * Math.max(1, Math.floor(o.poolPerModelConcurrency ?? 1)))
+    }
+    return Math.max(1, o.refineConcurrency ?? 3)
+  }
+
   get pending(): number {
     return this.queue.length
   }
@@ -523,8 +562,13 @@ export class RefineQueue {
       return // 启发式保留
     }
     try {
-      // provider/model 解析：refineProvider='auto' 跟随主请求 provider，
-      // 显式 provider 可跨供应商（设置页手动选择）
+      // **池子模式**：多模型轮转、每模型并发、失败换模型重投。
+      const pool = this.pools?.current()
+      if (pool !== undefined && pool.size > 0) {
+        await this.runViaPool(llm, task, pool, o)
+        return
+      }
+      // 单模型路径（池子为空 = 未配置多模型）：保持原有行为
       const { route, error } = await resolveRefineRoute(llm, { provider: o.provider, model: o.model }, task)
       if (error) {
         // eslint-disable-next-line no-console
@@ -563,6 +607,95 @@ export class RefineQueue {
         reason,
       )
       this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, reason)
+    }
+  }
+
+  /**
+   * 池子模式下一次精炼：轮转取模型 → 失败则退避并换下一个模型重投。
+   *
+   * 重投的语义：一个任务最多尝试 `poolMaxAttempts` 轮（默认 3），每轮都重新
+   * `pick()`，因此**同一任务可能被不同模型处理**——这正是"一个模型限流了，
+   * 别的模型顶上"的实现。全部尝试失败才写回失败原因（并带上最后一轮的错）。
+   * @param llm - llm 服务。
+   * @param task - 精炼任务。
+   * @param pool - 当前模型池。
+   * @param o - 实时配置。
+   */
+  private async runViaPool(
+    llm: LlmLike,
+    task: RefineTask,
+    pool: ModelPool,
+    o: RefineOptions,
+  ): Promise<void> {
+    const maxAttempts = Math.max(1, Math.floor(o.poolMaxAttempts ?? DEFAULT_POOL_MAX_ATTEMPTS))
+    // 跨"重新入队"的总轮数上限：模型退避时任务会放回队列等待，但**必须有界**——
+    // 否则一个恒定失败的任务（如提示词本身有问题）会无限重投。
+    const totalBudget = maxAttempts * 3
+    const timeoutMs = (o.refineTimeout ?? 60) * 1000
+    let lastReason = ''
+    let lastRef: ModelRef | undefined
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if ((task.attempts ?? 0) >= totalBudget) {
+        this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, lastReason || '精炼重试次数已达上限')
+        return
+      }
+      const ref = pool.pick()
+      if (ref === undefined) {
+        // 全部在退避/满载：把任务放回队列并安排一次唤醒（不在这里空转、不丢任务）
+        const wait = Math.max(200, pool.nextWakeMs())
+        task.attempts = (task.attempts ?? 0) + 1
+        if (task.attempts > totalBudget) {
+          this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, '精炼模型池持续不可用（已放弃）')
+          return
+        }
+        setTimeout(() => { this.queue.push(task); this.pump() }, wait)
+        return
+      }
+      lastRef = ref
+      pool.acquire(ref)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const route: RefineRoute = { provider: ref.provider, model: ref.model }
+        const res = await Promise.race([
+          this.runRefine(llm, task, route, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
+          }),
+        ])
+        if (res && res.text.length > 0) {
+          pool.succeeded(ref)
+          this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
+            input: res.inputTokens,
+            output: estimateTokens(res.text),
+          })
+          return
+        }
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : String(error)
+        const delay = pool.failed(ref)
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[dsh-think-summary] refine attempt failed, backing off:',
+          formatModelRef(ref),
+          lastReason,
+          '退避 ' + delay + 'ms',
+          '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
+        )
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+        pool.release(ref)
+      }
+    }
+
+    // 本轮尝试全失败：写回原因，并在退避到期后**有限次**重投（由 totalBudget 兜底）
+    const where = lastRef === undefined ? '' : formatModelRef(lastRef) + ' '
+    const reason = lastReason !== '' ? lastReason : '精炼模型池暂无可用模型'
+    this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, where + reason)
+    task.attempts = (task.attempts ?? 0) + 1
+    const wait = pool.nextWakeMs()
+    if (wait > 0 && task.attempts <= totalBudget) {
+      setTimeout(() => { this.queue.push(task); this.pump() }, wait)
     }
   }
 

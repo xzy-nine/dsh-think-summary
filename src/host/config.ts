@@ -38,6 +38,18 @@ export interface ThinkSummaryConfig {
    */
   refineDisableReasoning?: boolean
   /**
+   * **精炼模型池**：`"provider/model"` 字符串数组（也容忍 `{provider,model}` 对象）。
+   *
+   * 非空时摘要与翻译都从池子里**轮流取**模型，并发按"每模型"计算，
+   * 失败模型进入指数退避、由其他模型顶上——免费模型各自限流的场景靠这个错开。
+   * 留空则回退单模型（`refineProvider`/`refineModel`）。
+   */
+  refineModels?: unknown[]
+  /** **每个模型**的并发上限（池子模式；免费模型建议 1）。 */
+  poolPerModelConcurrency?: number
+  /** 单个精炼任务在池子里的最大尝试轮数（每轮可能换模型）。 */
+  poolMaxAttempts?: number
+  /**
    * 精炼最小段（token）：低于该值的**非末尾**段跳过精炼、保留启发式摘要。
    * 默认 0 = 每个段都精炼（本地模型成本可忽略）；设成 segmentMinTokens 可恢复
    * "只精炼肥段"的省 token 行为。
@@ -184,6 +196,10 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   // 未关思考的推理型模型建议 ≥1024（预算被推理耗尽会明确报错）
   refineOutputTokens: 512,
   refineDisableReasoning: true,
+  refineModels: [],
+  // 免费模型普遍"每模型 1 并发"：默认就按每模型 1 算，多模型时总并发随模型数放大
+  poolPerModelConcurrency: 1,
+  poolMaxAttempts: 3,
   refineMinTokens: 0,
   refineProvider: 'auto',
   refineModel: 'auto',

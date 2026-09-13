@@ -175,4 +175,17 @@ const PANEL_CSS = `
 .ts-todo-btn--fail:disabled{opacity:1;color:var(--dsw-alias-state-error-primary)}
 /* 失败段的短错误码（RATE_LIMIT 429 / INVALID_REQUEST 400 …）：不抢摘要的视觉重心 */
 .ts-proc-code{flex:none;color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-module-platform);border-radius:4px;padding:0 4px;font-size:10px;line-height:16px;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* ---------- 模型池：气泡 + 添加行（设置卡内） ---------- */
+.ts-pool-chips{display:flex;flex-wrap:wrap;gap:6px;min-height:26px;align-items:center}
+.ts-pool-empty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.ts-pool-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:2px 4px 2px 10px;font-size:12px;line-height:18px}
+.ts-pool-chip-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ts-pool-chip-del{appearance:none;cursor:pointer;flex:none;width:18px;height:18px;border:0;border-radius:50%;background:0 0;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:16px;padding:0;transition:color .12s,background-color .12s}
+.ts-pool-chip-del:hover:not(:disabled){color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.ts-pool-chip-del:disabled{opacity:.4;cursor:default}
+.ts-pool-add{display:flex;gap:6px;align-items:center}
+.ts-pool-add .ts-set-input{flex:1;min-width:0}
+.ts-pool-add-btn{appearance:none;font:inherit;cursor:pointer;flex:none;border:1px solid var(--dsw-alias-border-l2);background:0 0;color:var(--dsw-alias-label-primary);border-radius:8px;padding:0 12px;height:34px;font-size:13px;line-height:1.5;transition:border-color .12s,background-color .12s}
+.ts-pool-add-btn:hover:not(:disabled){border-color:var(--dsw-alias-label-dimmed);background:var(--dsw-alias-interactive-bg-hover)}
+.ts-pool-add-btn:disabled{opacity:.4;cursor:default}
 `

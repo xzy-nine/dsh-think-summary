@@ -267,3 +267,28 @@ pi-ai 的 `describableReasoningLevel` 注释写明：`off` 会被翻译成**省�
 
 完整原因始终挂在 `title`（悬停可看）；抽不到码时不造假码、退回原文单行截断。
 宿主侧的任务翻译也改为把 `error` 回传界面（此前只 `console.error`，界面永远只说"失败"）。
+
+### 8.6 单模型 → 模型池（多模型轮转 / 每模型并发 / 指数退避）
+
+§8.4 的结论（"把并发调到 1"）只是止血：单模型被限流时整条精炼链路都停摆。
+改成**模型池**（`src/host/pool.ts`）后：
+
+| 机制 | 实现 | 解决什么 |
+|---|---|---|
+| 轮转 | `ModelPool.pick()` 从游标起找第一个"未退避且未满载"的，命中即推进游标 | 不盯着一个模型薅，多个免费模型轮流用 |
+| 每模型并发 | 每个 `PoolEntry` 各自 `inFlight`；总并发 = 模型数 × `poolPerModelConcurrency` | 不再"对一个模型并发"，多模型时总吞吐随模型数放大 |
+| 指数退避 | 失败后 `blockedUntil = now + base*2^(n-1)`（2s→4s→…→60s），成功清零 | 被限流的模型自动让位，其他模型顶上 |
+| 换模型重试 | 一个任务最多 `poolMaxAttempts` 轮，每轮重新 `pick()`；全失败才写回错误 | 单次失败不再"永久停在未精炼" |
+
+**关键设计点：精炼与任务翻译必须共用同一个池子**（`ModelPoolManager` 在
+`index.ts` 注入 `RefineQueue.usePool()` 与 `createTodoTranslator()`）。
+否则看板翻译会绕过精炼的退避继续打同一个模型——§8.4 里那个"两个调用点"的
+隐患正是这么来的。
+
+重投必须**有界**：任务在模型退避时会被放回队列等待，若不加 `attempts` 上限，
+一个恒定失败的任务（例如提示词本身有问题）会无限重投。现在
+`totalBudget = poolMaxAttempts * 3` 兜底。
+
+配置形状取舍：设置页存的是 **`"provider/model"` 字符串数组**（`refineModels`），
+因为设置桥是逐字段 `set`，直接存 JSON 值最省事；气泡显示时只取斜杠后的模型名，
+完整值放 `title` 悬停。池子为空则回退原来的 `refineProvider`/`refineModel` 单模型路径。

@@ -25,10 +25,12 @@ import {
   resolveOutputCap,
   clampOutputTokens,
   canDisableReasoning,
+  DEFAULT_POOL_MAX_ATTEMPTS,
   type LlmLike,
   type RefineTask,
 } from './summarize/refine.js'
 import { DEFAULT_TODO_PROMPT, TODO_USER_TEMPLATE, type ThinkSummaryConfig } from './config.js'
+import { formatModelRef, type ModelPoolManager } from './pool.js'
 
 /** 单次翻译的条目上限（防一次塞太多把本地小模型撑爆）。 */
 export const MAX_TODO_ITEMS = 40
@@ -59,12 +61,14 @@ export interface TodoTranslator {
  * @param getOptions - 实时配置。
  * @param getLlm - llm 服务（可选）。
  * @param defaultModel - provider/model 兜底（无实时流上下文，用会话默认模型）。
+ * @param pools - 与精炼共用的模型池（可选；为空则回退单模型路径）。
  * @returns 供 RPC 调用的翻译器。
  */
 export function createTodoTranslator(
   getOptions: () => ThinkSummaryConfig,
   getLlm: () => LlmLike | undefined,
   defaultModel: () => { provider: string; model: string },
+  pools?: ModelPoolManager,
 ): TodoTranslator {
   /** 原文 → 译文（与会话无关的内容缓存）。 */
   const memo = new Map<string, string>()
@@ -85,7 +89,7 @@ export function createTodoTranslator(
       }
       if (missing.length === 0) return { translations: result } // 全命中：不调模型
       try {
-        const fresh = await translateBatch(getOptions(), getLlm, defaultModel, sessionId, missing)
+        const fresh = await translateBatch(getOptions(), getLlm, defaultModel, sessionId, missing, pools)
         for (const [content, zh] of Object.entries(fresh)) {
           result[content] = zh
           remember(memo, content, zh)
@@ -131,16 +135,51 @@ function remember(memo: Map<string, string>, content: string, zh: string): void 
   }
 }
 
-/** 批量翻译：一次 LLM 调用，按行对应回各条目。 */
+/**
+ * 批量翻译：走模型池（多模型轮转 + 失败退避换模型），池子为空时回退单模型。
+ *
+ * 与精炼**共用同一个池子**（由 index.ts 注入同一个 `ModelPoolManager`）：
+ * 只有共用，摘要与翻译才会真正互相轮转，且一个模型的退避对两者同时生效。
+ */
 async function translateBatch(
   o: ThinkSummaryConfig,
   getLlm: () => LlmLike | undefined,
   defaultModel: () => { provider: string; model: string },
   sessionId: string,
   targets: readonly string[],
+  pools: ModelPoolManager | undefined,
 ): Promise<Record<string, string>> {
   const llm = getLlm()
   if (!llm || typeof llm.stream !== 'function') return {}
+  const pool = pools?.current()
+  if (pool !== undefined && pool.size > 0) {
+    const maxAttempts = Math.max(1, Math.floor(o.poolMaxAttempts ?? DEFAULT_POOL_MAX_ATTEMPTS))
+    let lastReason = ''
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const ref = pool.pick()
+      if (ref === undefined) break
+      pool.acquire(ref)
+      try {
+        const map = await callOnce(llm, o, ref.provider, ref.model, targets)
+        pool.succeeded(ref)
+        return map
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : String(error)
+        const delay = pool.failed(ref)
+        console.warn(
+          '[dsh-think-summary] 任务看板翻译换模型重试：',
+          formatModelRef(ref),
+          lastReason,
+          '退避 ' + delay + 'ms',
+        )
+      } finally {
+        pool.release(ref)
+      }
+    }
+    throw new Error(lastReason !== '' ? lastReason : '任务翻译模型池暂无可用模型')
+  }
+
+  // 单模型路径（池子未配置）
   const fallback = defaultModel()
   const routeTask: RefineTask = {
     sessionId,
@@ -152,27 +191,36 @@ async function translateBatch(
   }
   const { route, error } = await resolveRefineRoute(llm, { provider: o.refineProvider, model: o.refineModel }, routeTask)
   if (!route.provider || !route.model) {
-    console.error('[dsh-think-summary] 任务看板翻译跳过：', error ?? '精炼模型不可用')
-    return {}
+    throw new Error(error ?? '精炼模型不可用')
   }
+  return callOnce(llm, o, route.provider, route.model, targets)
+}
 
+/** 用指定模型跑一次翻译（maxTokens 收敛、按需关思考，与精炼同口径）。 */
+async function callOnce(
+  llm: LlmLike,
+  o: ThinkSummaryConfig,
+  provider: string,
+  model: string,
+  targets: readonly string[],
+): Promise<Record<string, string>> {
   const input = targets.join('\n')
-  // 与精炼同口径：maxTokens 必须先收敛到供应商合法区间（未收敛时 st 会直接 400
-  // "field MaxTokens invalid"），关思考也只在该模型声明 off 档位时才发。
+  // maxTokens 必须先收敛到供应商合法区间（未收敛时 st 会直接 400
+  // "field MaxTokens invalid"）；关思考也只在该模型声明 off 档位时才发。
   const [cap, canOff] = await Promise.all([
-    resolveOutputCap(llm, route.provider, route.model),
-    o.refineDisableReasoning === true ? canDisableReasoning(llm, route.provider, route.model) : Promise.resolve(false),
+    resolveOutputCap(llm, provider, model),
+    o.refineDisableReasoning === true ? canDisableReasoning(llm, provider, model) : Promise.resolve(false),
   ])
   const stream = llm.stream({
-    provider: route.provider,
-    model: route.model,
+    provider,
+    model,
     maxTokens: clampOutputTokens(o.refineOutputTokens, cap),
     temperature: 0,
     ...canOff ? { reasoningEffort: 'off' } : {},
     system: o.todoTranslatePrompt ?? DEFAULT_TODO_PROMPT,
     messages: [{ role: 'user', content: [{ type: 'text', text: TODO_USER_TEMPLATE.replace('{text}', input) }] }],
   })
-  const raw = await collectStreamText(stream, `${route.provider}/${route.model}`)
+  const raw = await collectStreamText(stream, `${provider}/${model}`)
   const lines = raw.split(/\r?\n/).map((s) => s.trim()).filter((s) => s.length > 0)
   const map: Record<string, string> = {}
   targets.forEach((content, i) => {
