@@ -37,6 +37,14 @@ const Config = z.object({
   refineEnabled: z.boolean().default(true),
   refineMaxInputTokens: z.number().default(800),
   refineOutputTokens: z.number().default(512),
+  /**
+   * 精炼请求显式关闭思考（`reasoningEffort: 'off'`）。
+   *
+   * 供应商必须声明该档位才有效（`compat.supportsReasoningEffort: true` +
+   * 模型 `reasoningEfforts.off`）；未声明时请求以 UNSUPPORTED_REASONING_EFFORT
+   * 明确失败——静默沿用供应商默认会让默认思考的模型继续烧预算。
+   */
+  refineDisableReasoning: z.boolean().default(true),
   /** 精炼最小段（token）：0 = 每个段都精炼（默认）。 */
   refineMinTokens: z.number().default(0),
   /** 'auto' = 跟随主请求 provider；或显式 provider id（可跨供应商精炼）。 */
@@ -92,6 +100,7 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
         refineConcurrency: c.refineConcurrency,
         refineTimeout: c.refineTimeout,
         trim: c.refineTrim,
+        disableReasoning: c.refineDisableReasoning,
       }
     },
     () => ctx.get('llm') as LlmLike | undefined,

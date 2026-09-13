@@ -19,7 +19,15 @@
  * 缓存与内容一一对应（与会话无关）：同一句原文在任何会话、任何页面刷新后都命中，
  * 重复点击不会再调模型。宿主不判断"哪些条目该翻"——请求里给什么就翻什么。
  */
-import { resolveRefineRoute, collectStreamText, type LlmLike, type RefineTask } from './summarize/refine.js'
+import {
+  resolveRefineRoute,
+  collectStreamText,
+  resolveOutputCap,
+  clampOutputTokens,
+  canDisableReasoning,
+  type LlmLike,
+  type RefineTask,
+} from './summarize/refine.js'
 import { DEFAULT_TODO_PROMPT, TODO_USER_TEMPLATE, type ThinkSummaryConfig } from './config.js'
 
 /** 单次翻译的条目上限（防一次塞太多把本地小模型撑爆）。 */
@@ -136,11 +144,18 @@ async function translateBatch(
   }
 
   const input = targets.join('\n')
+  // 与精炼同口径：maxTokens 必须先收敛到供应商合法区间（未收敛时 st 会直接 400
+  // "field MaxTokens invalid"），关思考也只在该模型声明 off 档位时才发。
+  const [cap, canOff] = await Promise.all([
+    resolveOutputCap(llm, route.provider, route.model),
+    o.refineDisableReasoning === true ? canDisableReasoning(llm, route.provider, route.model) : Promise.resolve(false),
+  ])
   const stream = llm.stream({
     provider: route.provider,
     model: route.model,
-    maxTokens: o.refineOutputTokens ?? 512,
+    maxTokens: clampOutputTokens(o.refineOutputTokens, cap),
     temperature: 0,
+    ...canOff ? { reasoningEffort: 'off' } : {},
     system: o.todoTranslatePrompt ?? DEFAULT_TODO_PROMPT,
     messages: [{ role: 'user', content: [{ type: 'text', text: TODO_USER_TEMPLATE.replace('{text}', input) }] }],
   })

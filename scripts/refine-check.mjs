@@ -10,7 +10,7 @@
  *
  * 依赖已构建的 lib/（先跑 `npm run build`）。
  */
-import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary } from '../lib/host/summarize/refine.js'
+import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary, resolveOutputCap, clampOutputTokens, canDisableReasoning } from '../lib/host/summarize/refine.js'
 import { decideRefine } from '../lib/host/summarize/pipeline.js'
 import { createTodoTranslator } from '../lib/host/todo.js'
 
@@ -160,6 +160,52 @@ check('整体摘要同样受中文硬校验',
     { type: 'finish', reason: { kind: 'stop' } },
   ]),
   { kind: 'think-failed', reason: 'ollma/qwen3.5:4b 摘要不是中文：「I am fixing the baseURL 404」' })
+
+// ── 6.5 输出预算收敛与关思考能力探测（供应商 400 的真实根因） ────────────────
+/** 假 llm：只提供 resolveModelInfo。 */
+const infoLlm = (info) => ({ stream: () => (async function* () {})(), resolveModelInfo: async () => info })
+
+check('声明了 maxTokens 的模型 → 用它作上限',
+  await resolveOutputCap(infoLlm({ context: { contextWindow: 1048576 }, defaultMaxTokens: 65536 }), 'st', 'deepseek-v4-flash'),
+  65536)
+check('上限远小于 contextWindow 时以上限为准（st：ctx 1048576 / 上限 65536）',
+  await resolveOutputCap(infoLlm({ context: { contextWindow: 1048576 }, defaultMaxTokens: 65536 }), 'st', 'deepseek-v4-flash') < 1048576,
+  true)
+check('未声明 maxTokens → 返回 undefined（不拿 contextWindow 顶替）',
+  await resolveOutputCap(infoLlm({ context: { contextWindow: 1048576 } }), 'st', 'x'),
+  undefined)
+check('元数据查询抛错 → undefined',
+  await resolveOutputCap({ stream: () => (async function* () {})(), resolveModelInfo: async () => { throw new Error('nope') } }, 'st', 'x'),
+  undefined)
+check('宿主无 resolveModelInfo（旧版）→ undefined',
+  await resolveOutputCap({ stream: () => (async function* () {})() }, 'st', 'x'),
+  undefined)
+
+// 生产事故复现：用户设 refineOutputTokens = 9999999，商汤报
+// "field MaxTokens invalid, should be in [1, 384000]"
+check('上限已知：9999999 被收敛到供应商上限（商汤不再 400）',
+  clampOutputTokens(9999999, 65536), 65536)
+check('上限未知：保留用户配置值（buddy 等今天的可用行为不被改动）',
+  clampOutputTokens(9999999, undefined), 9999999)
+check('正常预算不变', clampOutputTokens(512, 65536), 512)
+check('上限未知 + 正常预算也不变', clampOutputTokens(512, undefined), 512)
+check('脏配置（0 / 负数 / NaN / undefined）→ 退回默认预算',
+  [clampOutputTokens(0, 65536), clampOutputTokens(-5, undefined), clampOutputTokens(Number.NaN, 65536), clampOutputTokens(undefined, undefined)],
+  [512, 512, 512, 512])
+check('预算永不低于 1', clampOutputTokens(0.4, 65536), 1)
+
+check('模型声明了 off 档位 → 可以关思考',
+  await canDisableReasoning(infoLlm({ reasoning: { efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }] } }), 'ollma', 'qwen3.5:4b'),
+  true)
+check('模型未声明 off（只有思考档位）→ 不发，避免把可用路由打成失败',
+  await canDisableReasoning(infoLlm({ reasoning: { efforts: [{ id: 'high' }] } }), 'st', 'x'),
+  false)
+check('完全没有 reasoning 能力 → 不发',
+  await canDisableReasoning(infoLlm({}), 'st', 'x'),
+  false)
+check('能力查询抛错 → 不发（保守：不破坏可用请求）',
+  await canDisableReasoning({ stream: () => (async function* () {})(), resolveModelInfo: async () => { throw new Error('nope') } }, 'st', 'x'),
+  false)
 
 // ── 7. 任务看板翻译：手动触发、给什么翻什么、按原文缓存 ──────────────────────
 /** 假 llm + 调用计数；译文按行对应请求里的条目顺序。 */

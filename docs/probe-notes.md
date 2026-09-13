@@ -185,3 +185,61 @@
    这是唯一的非 hash 选择器钩子）把官方面板自己的边框/圆角/底色去掉，按钮作为
    页脚行贴底 → 视觉上是同一张卡片。官方渲染 `null`（无待办）时不要输出外层 div，
    否则会留一个空卡框。
+
+## 8. 换供应商就总结不了 / 关思考没反应（0.1.5 实测）
+
+两条都被误判成"插件自己拼 curl"，实际都走 dsh 的 `llm` 服务（报错全是 pi-ai 的
+`PI_AI_ERROR`/`INVALID_REQUEST`）。证据来自 `~/.dsh/dsh-think-summary.json`
+的 `unrefinedReason` 历史（111 条）与直连供应商的对照实测。
+
+### 8.1 `max_tokens` 原样透传 → 供应商 400
+
+```
+st/deepseek-v4-flash        400  field MaxTokens invalid, should be in [1, 384000]
+st/sensenova-6.8-flash-lite 400  field MaxTokens invalid, should be in [1, 65536]
+```
+
+插件把设置里的 `refineOutputTokens` **直接**当 `maxTokens` 发给 `llm.stream`，
+而该值被设成了 `9999999`。**主链路不会这样**：它只在 `agent-loop.maxTokens`
+显式配置时才发 `maxTokens`（`packages/core/agent-loop/src/agent.ts`），
+否则省略，让适配器按目录处理。
+
+修法：`resolveOutputCap()` 读 `llm.resolveModelInfo().defaultMaxTokens`
+（= 供应商块里写了 `maxTokens` 才有，是 harness 为**部署选择的每请求上限**），
+只在**上限已知**时把预算收敛到上限内；上限未知则**保留原值**不猜测
+——强压到猜出来的数字会让今天能用的路由（如 buddy）因预算耗尽而失败，与本次的 bug 同类。
+
+要点：**不能拿 `context.contextWindow` 当输出上限**——那是输入上下文容量。
+实测 `st/deepseek-v4-flash` contextWindow 1048576 而 `max_tokens` 上限 65536。
+
+### 8.2 关思考：`off` 在没声明的供应商上等于没关
+
+pi-ai 的 `describableReasoningLevel` 注释写明：`off` 会被翻译成**省略 reasoning
+字段**，对该模型与"不传 effort"字节级等价——**供应商自己默认思考时，选 `off` 依旧思考**。
+所以"关思考没用"不是插件 bug，而是该供应商/模型**没有声明可关的档位**。
+
+修法：新增 `refineDisableReasoning`（默认开），但**只在该模型确实声明了 `off` 档位时
+才发送** `reasoningEffort: 'off'`（`canDisableReasoning()` 查 `resolveModelInfo().reasoning.efforts`）。
+无条件发送会抛 `UNSUPPORTED_REASONING_EFFORT`，把本来可用的路由打挂
+（`packages/llm/llm/src/index.ts` 的 `resolveCallWithInfo`）。
+
+### 8.3 商汤（`st`）实测结论
+
+直连 `https://token.sensenova.cn/v1` 得到的事实（**不是猜的**）：
+
+| 事项 | 实测 |
+|---|---|
+| `/v1/models` | 200，每模型带 `max_output_length`、`output_modalities`、`supported_features` |
+| `reasoning_effort` 取值 | 只接受 `low/medium/high/xhigh/**none**`；`off`、`minimal` → **400** `field ReasoningEffort invalid` |
+| 关思考效果 | `reasoning_effort: none` → `reasoning_content` 长度 69 → **0**（真关掉） |
+| `sensenova-6.7-flash-lite` | **404 `model route not found`**（列表里有它，chat 打不通；疑似账号 SKU/额度） |
+| `sensenova-u1-fast` / `u1.5-lite` | **404 `model is not found`**：`output_modalities` 只有 `image`（信息图生成专用，无 chat 路由） |
+| 可用 chat 路由 | `deepseek-v4-flash`、`glm-5.2`、`sensenova-6.8-flash-lite`、`deepseek-v4-pro`、`kimi-k3` |
+
+因此 `settings.yaml` 的 `st` 块：加 `compat.supportsReasoningEffort: true` +
+每模型 `reasoningEfforts: { off: none, low/low, medium/medium, high/high }`
+（`off` 映射到商汤认的 `none`——这正是 pi-ai 里 `reasoningEfforts.off` 的用途），
+按 `max_output_length` 补 `maxTokens`，并移除两个无 chat 路由的 u1 模型。
+
+已用仓库自身的 `resolveRouteModels` + `getSupportedThinkingLevels` 验证该 profile
+解析无误、`configuredMaxTokens` 恰为声明值、6 个模型都含 `off` 档位。

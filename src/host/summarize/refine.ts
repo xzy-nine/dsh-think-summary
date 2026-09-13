@@ -53,6 +53,15 @@ export interface RefineOptions {
    * 但中段细节可能丢失——留三档开关供用户权衡。
    */
   trim?: 'headtail' | 'tail' | 'full'
+  /**
+   * 精炼请求是否显式关闭思考（`reasoningEffort: 'off'`）。
+   *
+   * 只有该模型声明了 `off` 档位（供应商 `compat.supportsReasoningEffort: true`
+   * + 模型 `reasoningEfforts.off`）才真正生效；未声明时 llm 服务会以
+   * `UNSUPPORTED_REASONING_EFFORT` 明确失败——这是刻意的"失败可见"，
+   * 避免静默沿用供应商默认（默认思考的供应商会照旧推理并烧掉预算）。
+   */
+  disableReasoning?: boolean
 }
 
 export interface RefineTask {
@@ -261,6 +270,92 @@ export async function resolveModel(llm: LlmLike, provider: string): Promise<stri
     /* 目录不可用时由调用方决定是否回退 */
   }
   return ''
+}
+
+/**
+ * 本次请求可用的输出上限（token），`undefined` = **不知道上限**：
+ *  - 模型元数据的 `defaultMaxTokens` = **部署显式配置**的每请求输出上限
+ *    （供应商块里写了 `maxTokens` 才有），这是唯一可靠来源。
+ *  - 未声明时返回 undefined，**绝不用 `context.contextWindow` 顶替**：
+ *    那是输入上下文容量，与各家对 `max_tokens` 的合法区间无关。实测
+ *    `st/deepseek-v4-flash` 的 contextWindow 是 1048576，而它的 `max_tokens`
+ *    上限只有 65536——用 contextWindow 收敛仍会被供应商 400 拒绝。
+ *
+ * 存在的理由：`llm.stream` 会把 `maxTokens` **原样**发给供应商，而各家对
+ * `max_tokens` 有自己的合法区间——插件曾把用户设的超大预算直接透传，
+ * 商汤直接 400（`field MaxTokens invalid, should be in [1, 384000]`）。
+ * 主链路不会这样：它只在 agent-loop 显式配置时才发 maxTokens。
+ * @param llm - llm 服务最小面。
+ * @param provider - 供应商 id。
+ * @param model - 模型 id。
+ * @returns 配置的输出上限；未声明时 undefined（调用方保持原值，不做猜测性收敛）。
+ */
+export async function resolveOutputCap(
+  llm: LlmLike,
+  provider: string,
+  model: string,
+): Promise<number | undefined> {
+  if (!provider || !model || typeof llm.resolveModelInfo !== 'function') return undefined
+  try {
+    const info = (await llm.resolveModelInfo(provider, model)) as { defaultMaxTokens?: unknown }
+    const declared = info.defaultMaxTokens
+    if (typeof declared === 'number' && Number.isFinite(declared) && declared > 0) return Math.floor(declared)
+  } catch {
+    /* 元数据不可用：按"上限未知"处理 */
+  }
+  return undefined
+}
+
+/**
+ * 收敛实际发送的 `maxTokens`：
+ *  - **上限已知**（供应商块声明了 `maxTokens`）→ 不超过上限；这是唯一有依据的收敛。
+ *  - **上限未知** → 保留用户配置值，只把脏值（0/负/NaN）修正为安全默认。
+ *
+ * 未知时不猜测：把一个大预算强行压到某个猜出来的数字，可能让本来能用的
+ * 路由（如 buddy）因预算被推理耗尽而失败——那与本次要修的 bug 同类。
+ * @param requested - 设置的预算（可能超大或非法）。
+ * @param cap - 配置的输出上限；undefined = 未知。
+ * @returns 实际发送的 maxTokens（始终为合法正整数）。
+ */
+export function clampOutputTokens(requested: number | undefined, cap: number | undefined): number {
+  const wanted = typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+    ? Math.floor(requested)
+    : 512 // 配置非法：退回默认预算（摘要只需 ~60 token，512 足够）
+  if (cap === undefined) return Math.max(1, wanted)
+  return Math.max(1, Math.min(wanted, cap))
+}
+
+/**
+ * 该模型是否**声明**了 `off` 推理档位（可以显式关思考）。
+ *
+ * 为什么必须先问再发：llm 服务对未声明的档位**直接抛** UNSUPPORTED_REASONING_EFFORT
+ * （`resolveCallWithInfo`），所以无条件发送 `reasoningEffort: 'off'` 会打挂
+ * 本来能用的路由。只有模型确实提供 `off` 时才发。
+ *
+ * 另需知道 pi-ai 的语义边界：`off` 在部分供应商上是"省略 reasoning 字段"，
+ * 若该供应商自身默认思考，则 `off` 与不传等价、仍会思考（pi-ai 源码
+ * `describableReasoningLevel` 注释写明）。插件能做的到此为止，剩下取决于供应商。
+ * @param llm - llm 服务最小面。
+ * @param provider - 供应商 id。
+ * @param model - 模型 id。
+ * @returns 是否可安全发送 `off`。
+ */
+export async function canDisableReasoning(
+  llm: LlmLike,
+  provider: string,
+  model: string,
+): Promise<boolean> {
+  if (!provider || !model || typeof llm.resolveModelInfo !== 'function') return false
+  try {
+    const info = (await llm.resolveModelInfo(provider, model)) as {
+      reasoning?: { efforts?: Array<{ id?: unknown }> }
+    }
+    const efforts = info.reasoning?.efforts
+    if (!Array.isArray(efforts)) return false
+    return efforts.some((e) => e !== undefined && e !== null && e.id === 'off')
+  } catch {
+    return false // 元数据不可用：不发，避免把能用的请求打成失败
+  }
 }
 
 /**
@@ -478,8 +573,7 @@ export class RefineQueue {
     maxInputTokens: number,
     outputTokens: number,
   ): Promise<{ text: string; inputTokens: number }> {
-    // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；
-    // system 走顶层字段；该 provider 不支持 reasoningEffort（勿设置）。
+    // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；system 走顶层字段。
     const trimMode = this.getOptions().trim
     const inputText =
       trimMode === 'tail'
@@ -487,23 +581,51 @@ export class RefineQueue {
         : trimMode === 'full'
           ? task.text
           : headTailTrim(task.text, maxInputTokens)
-    const stream = llm.stream({
-      provider: route.provider,
-      model: route.model,
-      maxTokens: outputTokens,
-      // 摘要任务要稳定：不要采样发散（温度 0）
-      temperature: 0,
-      system: this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          // 片段用分隔符包住、要求写在片段之后：只发原文会让模型"接着想"而不是概括
-          content: [{ type: 'text', text: REFINE_USER_TEMPLATE.replace('{text}', inputText) }],
-        },
-      ],
-    })
+    const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
+      REFINE_USER_TEMPLATE.replace('{text}', inputText))
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
+  }
+
+  /**
+   * 构造一次精炼请求（段精炼与整体摘要共用）：收敛 maxTokens、按需关思考。
+   *
+   * `maxTokens` 必须先收敛：llm 会把它原样发给供应商，各家各有合法区间
+   * （商汤：`field MaxTokens invalid, should be in [1, 384000]`）。
+   * `reasoningEffort: 'off'` 只在**配置开启且该模型确实声明 off 档位**时发送：
+   * 未声明就发会被 llm 直接拒绝，把本来可用的路由打挂。
+   * @param llm - llm 服务。
+   * @param route - 解析后的 provider/model。
+   * @param outputTokens - 用户配置的输出预算。
+   * @param system - system 提示词。
+   * @param userText - user 消息正文。
+   * @returns 模型流。
+   */
+  private async buildRequest(
+    llm: LlmLike,
+    route: RefineRoute,
+    outputTokens: number,
+    system: string,
+    userText: string,
+  ): Promise<AsyncIterable<{ type?: string; text?: string }>> {
+    const o = this.getOptions()
+    const [cap, canOff] = await Promise.all([
+      resolveOutputCap(llm, route.provider, route.model),
+      o.disableReasoning === true
+        ? canDisableReasoning(llm, route.provider, route.model)
+        : Promise.resolve(false),
+    ])
+    return llm.stream({
+      provider: route.provider,
+      model: route.model,
+      maxTokens: clampOutputTokens(outputTokens, cap),
+      // 摘要任务要稳定：不要采样发散（温度 0）
+      temperature: 0,
+      // 只在该模型声明了 off 档位时发送（见 canDisableReasoning）
+      ...canOff ? { reasoningEffort: 'off' } : {},
+      system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
+    })
   }
 
   /**
@@ -518,16 +640,8 @@ export class RefineQueue {
     outputTokens: number,
   ): Promise<{ text: string; inputTokens: number }> {
     const inputText = headTailTrim(task.text, maxInputTokens)
-    const stream = llm.stream({
-      provider: route.provider,
-      model: route.model,
-      maxTokens: outputTokens,
-      temperature: 0,
-      system: this.getOptions().thinkPrompt ?? DEFAULT_THINK_PROMPT,
-      messages: [
-        { role: 'user', content: [{ type: 'text', text: THINK_USER_TEMPLATE.replace('{text}', inputText) }] },
-      ],
-    })
+    const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().thinkPrompt ?? DEFAULT_THINK_PROMPT,
+      THINK_USER_TEMPLATE.replace('{text}', inputText))
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }

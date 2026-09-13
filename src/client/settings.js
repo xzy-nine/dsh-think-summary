@@ -19,6 +19,7 @@ const FIELD_GROUPS = [
       { key: 'refineModel', label: '模型', kind: 'model', hint: 'auto = 所选供应商目录中上下文窗口最小的可用模型；或从列表固定指定' },
       { key: 'refineConcurrency', label: '并发', kind: 'num', unit: '', hint: '并行精炼数；本地模型建议 1–2' },
       { key: 'refineTimeout', label: '超时', kind: 'num', unit: 's', hint: '单任务超时（秒）；卡死的任务超时放弃并释放并发位' },
+      { key: 'refineDisableReasoning', label: '关闭思考', kind: 'bool', hint: '精炼请求带 reasoningEffort=off，省掉推理开销；只在该模型声明了 off 档位时发送（供应商需 compat.supportsReasoningEffort: true + 模型 reasoningEfforts.off），否则静默不发' },
     ],
   },
   {

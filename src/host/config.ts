@@ -30,6 +30,14 @@ export interface ThinkSummaryConfig {
   /** 精炼 API 完成预算（token），需覆盖推理+答案。 */
   refineOutputTokens?: number
   /**
+   * 精炼请求显式关闭思考（`reasoningEffort: 'off'`）。
+   *
+   * 仅在该模型**声明了 off 档位**时真正发送（供应商
+   * `compat.supportsReasoningEffort: true` + 模型 `reasoningEfforts.off`）；
+   * 未声明就不发——llm 服务对未声明档位直接抛错，会把本来可用的路由打挂。
+   */
+  refineDisableReasoning?: boolean
+  /**
    * 精炼最小段（token）：低于该值的**非末尾**段跳过精炼、保留启发式摘要。
    * 默认 0 = 每个段都精炼（本地模型成本可忽略）；设成 segmentMinTokens 可恢复
    * "只精炼肥段"的省 token 行为。
@@ -175,6 +183,7 @@ export const DEFAULTS: Required<Omit<ThinkSummaryConfig, 'refineModel' | 'refine
   // 关思考的本地模型：30 字结论 ≈ 60 token，512 留足余量；
   // 未关思考的推理型模型建议 ≥1024（预算被推理耗尽会明确报错）
   refineOutputTokens: 512,
+  refineDisableReasoning: true,
   refineMinTokens: 0,
   refineProvider: 'auto',
   refineModel: 'auto',
