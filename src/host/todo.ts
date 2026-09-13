@@ -45,9 +45,13 @@ export interface TodoTranslator {
    * 翻译给定的条目原文（给什么翻什么，不判断该不该翻）。
    * @param contents - 条目原文列表；空串与重复项会被剔除，超出上限的截断。
    * @param sessionId - 仅用于日志与路由兜底。
-   * @returns `原文 → 中文`；没有译文的条目不出现在结果里。
+   * @returns `原文 → 中文`；没有译文的条目不出现在结果里。失败时 `error` 带原因
+   *   （含 provider 错误码），供界面直接显示而不必翻日志。
    */
-  translate(contents: readonly unknown[], sessionId: string): Promise<Record<string, string>>
+  translate(
+    contents: readonly unknown[],
+    sessionId: string,
+  ): Promise<{ translations: Record<string, string>; error?: string }>
 }
 
 /**
@@ -66,9 +70,12 @@ export function createTodoTranslator(
   const memo = new Map<string, string>()
 
   return {
-    async translate(contents: readonly unknown[], sessionId: string): Promise<Record<string, string>> {
+    async translate(
+      contents: readonly unknown[],
+      sessionId: string,
+    ): Promise<{ translations: Record<string, string>; error?: string }> {
       const targets = normalizeTargets(contents)
-      if (targets.length === 0) return {}
+      if (targets.length === 0) return { translations: {} }
       const result: Record<string, string> = {}
       const missing: string[] = []
       for (const content of targets) {
@@ -76,18 +83,24 @@ export function createTodoTranslator(
         if (typeof hit === 'string' && hit.length > 0) result[content] = hit
         else missing.push(content)
       }
-      if (missing.length === 0) return result // 全命中：不调模型
+      if (missing.length === 0) return { translations: result } // 全命中：不调模型
       try {
         const fresh = await translateBatch(getOptions(), getLlm, defaultModel, sessionId, missing)
         for (const [content, zh] of Object.entries(fresh)) {
           result[content] = zh
           remember(memo, content, zh)
         }
+        // 调了模型却一条译文都没拿到：把原因回给界面（含错误码），而不是静默返回空
+        if (Object.keys(fresh).length === 0 && missing.length > 0) {
+          return { translations: result, error: '模型未返回可用译文' }
+        }
+        return { translations: result }
       } catch (error) {
-        // 只记日志：翻译失败不该让按钮请求 500，客户端保持原文即可
-        console.error('[dsh-think-summary] 任务看板翻译失败：', error instanceof Error ? error.message : error)
+        const reason = error instanceof Error ? error.message : String(error)
+        console.error('[dsh-think-summary] 任务看板翻译失败：', reason)
+        // 失败原因（含 RATE_LIMIT 429 / INVALID_REQUEST 400 这类码）回给界面直显
+        return { translations: result, error: reason }
       }
-      return result
     },
   }
 }

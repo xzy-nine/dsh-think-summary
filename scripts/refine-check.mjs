@@ -10,6 +10,7 @@
  *
  * 依赖已构建的 lib/（先跑 `npm run build`）。
  */
+import { readFileSync } from 'node:fs'
 import { RefineQueue, resolveRefineRoute, listProviderIds, normalizeSummary, resolveOutputCap, clampOutputTokens, canDisableReasoning } from '../lib/host/summarize/refine.js'
 import { decideRefine } from '../lib/host/summarize/pipeline.js'
 import { createTodoTranslator } from '../lib/host/todo.js'
@@ -227,32 +228,92 @@ function todoTranslator(lines, counter = { calls: 0 }) {
 }
 
 const empty = todoTranslator(['不该被调用'])
-check('没有条目 → 不调模型', [await empty.t.translate([], 's'), empty.counter.calls], [{}, 0])
+check('没有条目 → 不调模型', [await empty.t.translate([], 's'), empty.counter.calls], [{ translations: {} }, 0])
 
 const manual = todoTranslator(['修复 baseURL 的 404', '改善看板按钮'])
 check('给什么翻什么（不挑条目）',
   await manual.t.translate(['Fix the baseURL 404', 'Improve the board button'], 's'),
-  { 'Fix the baseURL 404': '修复 baseURL 的 404', 'Improve the board button': '改善看板按钮' })
+  { translations: { 'Fix the baseURL 404': '修复 baseURL 的 404', 'Improve the board button': '改善看板按钮' } })
 
 check('同一条目再翻 → 命中缓存，不调模型',
   [await manual.t.translate(['Fix the baseURL 404'], 's'), manual.counter.calls],
-  [{ 'Fix the baseURL 404': '修复 baseURL 的 404' }, 1])
+  [{ translations: { 'Fix the baseURL 404': '修复 baseURL 的 404' } }, 1])
 
 const filtered = todoTranslator(['只翻这条'])
 check('非字符串/空串被剔除、重复项只翻一次',
   await filtered.t.translate(['', 42, 'Only this one', 'Only this one'], 's'),
-  { 'Only this one': '只翻这条' })
+  { translations: { 'Only this one': '只翻这条' } })
 
 const truncated = { calls: 0 }
 const many = todoTranslator(Array.from({ length: 60 }, (_, i) => `第${i}条`), truncated)
 const capped = await many.t.translate(Array.from({ length: 60 }, (_, i) => `item ${i}`), 's')
 check('单次条目数封顶（60 条请求 → 只翻 40 条）',
-  [Object.keys(capped).length, truncated.calls], [40, 1])
+  [Object.keys(capped.translations).length, truncated.calls], [40, 1])
 
 const partial = todoTranslator(['只有一行译文'])
 check('模型少给译文 → 缺的条目就不出现在结果里',
   await partial.t.translate(['First line', 'Second line'], 's'),
-  { 'First line': '只有一行译文' })
+  { translations: { 'First line': '只有一行译文' } })
+
+// 失败也要把原因（含错误码）带给界面，不能静默返回空
+const failing = createTodoTranslator(
+  () => ({ refineProvider: 'st', refineModel: 'sensenova-6.8-flash-lite', refineOutputTokens: 512, todoTranslatePrompt: 'p' }),
+  () => ({
+    stream: () => (async function* () {
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'rpm exhausted' } } }
+    })(),
+  }),
+  () => ({ provider: 'st', model: 'sensenova-6.8-flash-lite' }),
+)
+const failedRes = await failing.translate(['Fix it'], 's')
+check('翻译失败 → 翻译结果为空但带 error（含码与状态）',
+  [failedRes.translations, /RATE_LIMIT/.test(failedRes.error || ''), /HTTP 429/.test(failedRes.error || '')],
+  [{}, true, true])
+
+// ── 8. 错误码抽取（界面直显，用户要求"不用翻日志"） ─────────────────────────
+// 这两个是 bundle 的**内部**函数（不在 exports 里），所以取拼接后的模块体重求值：
+// 去掉 ModuleLoader 外壳，只留 body（拼接的纯 JS），追加一行把目标函数递出来。
+const clientSrc = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+const bodyStart = clientSrc.indexOf('var React = require("react");')
+const bodyEnd = clientSrc.lastIndexOf('return module.exports;')
+if (bodyStart < 0 || bodyEnd < 0) {
+  console.error('FAIL 无法定位 client bundle 的模块体（构建产物结构变了？）')
+  failures++
+}
+const clientBody = clientSrc
+  .slice(bodyStart + 'var React = require("react");'.length, bodyEnd)
+  // 末段是 build 生成的 `exports.x = x;`（CommonJS 味道）——new Function 里会与
+  // 顶层的 await 撞上 Node 的"模块格式不明确"检查，这里只做纯函数测试，直接剥掉。
+  .replace(/^\s*exports\.[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*;\s*$/gm, '')
+const reactStub = { createElement: () => null, useState: () => [null, () => {}], useEffect: () => {}, Fragment: 'f' }
+// eslint-disable-next-line no-new-func -- 仅测试：求值拼接后的客户端模块体以取内部纯函数
+const { errCodeOf, shortErr } = new Function('React', clientBody + '\nreturn { errCodeOf, shortErr };')(reactStub)
+
+check('错误码：RATE_LIMIT + 429（商汤 rpm exhausted 的真实形状）',
+  errCodeOf('精炼失败：st/deepseek-v4-flash error：RATE_LIMIT 429: {"message":"rpm exhausted","type":"quota_exceeded_error","code":"8"}'),
+  'RATE_LIMIT 429')
+check('错误码：INVALID_REQUEST + 400（MaxTokens 事故的形状）',
+  errCodeOf('精炼失败：st/sensenova-6.8-flash-lite error：INVALID_REQUEST 400: {"message":"inference request is invalid","code":"400"}'),
+  'INVALID_REQUEST 400')
+check('错误码：无 HTTP 状态时取首个大写码（UNKNOWN_MODEL）',
+  errCodeOf('精炼失败：ollma/qwen3.5:2b error：UNKNOWN_MODEL pi-ai provider "ollma" has no configured model'),
+  'UNKNOWN_MODEL')
+check('错误码：超时',
+  errCodeOf('精炼失败：refine timeout after 60000ms'),
+  'TIMEOUT')
+check('错误码：预算被推理耗尽（max-tokens）',
+  errCodeOf('精炼失败：ollma/qwen3.5:4b 未返回文本（finish=max-tokens）：预算被推理耗尽，请调大「精炼预算」'),
+  'MAX_TOKENS')
+check('错误码：宿主无 llm 服务',
+  errCodeOf('llm 服务不可用（宿主未挂载）'),
+  'NO_LLM')
+check('错误码：抽不到码时返回空串（不造假码）',
+  [errCodeOf('精炼失败：模型抽风了'), errCodeOf(''), errCodeOf(undefined)],
+  ['', '', ''])
+check('短文案：有码用码', shortErr('精炼失败：st/x error：RATE_LIMIT 429: {"message":"rpm exhausted"}'), 'RATE_LIMIT 429')
+check('短文案：无码则单行截断（不把整段 JSON 顶到界面）',
+  shortErr('精炼失败：' + 'x'.repeat(100)).length <= 41,
+  true)
 
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

@@ -14,20 +14,68 @@ function fmtTok(n) {
   return k + 'k'
 }
 
+/**
+ * 从失败原因里抽一个**短错误码**，用于界面直显（不必再翻日志/悬停）。
+ *
+ * 实测原因串形状（provider 侧失败都带码，只是被长 JSON 淹没了）：
+ *   `精炼失败：st/deepseek-v4-flash error：RATE_LIMIT 429: {"message":"rpm exhausted",…}`
+ *   `精炼失败：st/sensenova-6.8-flash-lite error：INVALID_REQUEST 400: {…}`
+ *   `精炼失败：ollma/qwen3.5:2b error：UNKNOWN_MODEL pi-ai provider "ollma" …`
+ *   `精炼失败：refine timeout after 60000ms`
+ *   `精炼失败：ollma/qwen3.5:4b 未返回文本（finish=max-tokens）：预算被推理耗尽…`
+ * @param reason - `unrefinedReason` / `summaryReason` 原文。
+ * @returns 短码（如 `RATE_LIMIT 429`）；抽不到返回空串（界面只显示原文，不造假码）。
+ */
+function errCodeOf(reason) {
+  if (typeof reason !== 'string' || reason.length === 0) return ''
+  if (/timeout/i.test(reason)) return 'TIMEOUT'
+  if (/max-tokens/.test(reason)) return 'MAX_TOKENS'
+  if (/llm 服务不可用/.test(reason)) return 'NO_LLM'
+  // provider 侧：优先 `<大写码> <HTTP状态>`（RATE_LIMIT 429 / INVALID_REQUEST 400）
+  const withStatus = reason.match(/\b([A-Z][A-Z0-9_]{2,})\s+(\d{3})\b/)
+  if (withStatus) return withStatus[1] + ' ' + withStatus[2]
+  // 退而求其次：首个全大写码（UNKNOWN_MODEL / CONTEXT_WINDOW_EXCEEDED / PI_AI_ERROR）
+  const code = reason.match(/\b([A-Z][A-Z0-9_]{2,})\b/)
+  if (code) return code[1]
+  return ''
+}
+
+/**
+ * 短错误摘要：给按钮/徽章用的一行文案——优先错误码（`RATE_LIMIT 429`），
+ * 抽不到码时截断原始原因（只截一行、避免把整段 JSON 顶到界面上）。
+ * 完整原因仍由调用方挂到 title 上。
+ * @param reason - 失败原因原文。
+ * @returns 可直显的短文案。
+ */
+function shortErr(reason) {
+  const code = errCodeOf(reason)
+  if (code !== '') return code
+  if (typeof reason !== 'string' || reason.length === 0) return '失败'
+  const oneLine = reason.split(/\r?\n/)[0]
+  return oneLine.length > 40 ? oneLine.slice(0, 40) + '…' : oneLine
+}
+
 /** 段状态：主模型小结 → 小结标签；代码段/表格段 → 结构化摘要（未精炼）；未精炼原因 → 原因标签；待精炼 → 待精炼；已精炼 → 已精炼。 */
 function segStatus(s) {
   if (s && s.kind === 'self') return { cls: 'ts-seg-self', label: '思考小结' }
   if (s && s.skipReason === 'code') return { cls: 'ts-seg-skip', label: '代码段·未精炼' }
   if (s && s.skipReason === 'table') return { cls: 'ts-seg-skip', label: '表格·未精炼' }
   if (s && s.refined) return { cls: 'ts-seg-refined', label: '已精炼' }
-  if (s && s.unrefinedReason) return { cls: 'ts-seg-skip', label: s.unrefinedReason }
+  // 失败：badge 只显示**错误码**（`RATE_LIMIT 429`），完整原因放 title 悬停可看
+  if (s && s.unrefinedReason) {
+    const code = errCodeOf(s.unrefinedReason)
+    return { cls: 'ts-seg-skip', label: code !== '' ? code : s.unrefinedReason }
+  }
   if (s && !s.kind) return { cls: 'ts-seg-pending', label: '待精炼' }
   return null
 }
 
 function segStatusEl(s) {
   const st = segStatus(s)
-  return st ? React.createElement('span', { className: st.cls }, st.label) : null
+  if (!st) return null
+  // 完整失败原因始终挂在 title 上：码在面上，细节不丢
+  const title = s && s.unrefinedReason ? s.unrefinedReason : undefined
+  return React.createElement('span', { className: st.cls, title }, st.label)
 }
 
 /** 已精炼段的实际消耗标注：" · 精炼 in/out"（输入裁剪后 + 输出摘要）。 */

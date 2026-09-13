@@ -243,3 +243,27 @@ pi-ai 的 `describableReasoningLevel` 注释写明：`off` 会被翻译成**省�
 
 已用仓库自身的 `resolveRouteModels` + `getSupportedThinkingLevels` 验证该 profile
 解析无误、`configuredMaxTokens` 恰为声明值、6 个模型都含 `off` 档位。
+
+### 8.4 免费模型不让并发 → `RATE_LIMIT 429 rpm exhausted`
+
+商汤免费额度是**按分钟限流**的：并发 2 以上就 `429 code=8 rpm exhausted`。
+把设置里的「并发」调到 **1** 即可（`refineConcurrency: 1`）。
+
+注意插件里有**两个会打供应商的地方**：精炼队列（受 `refineConcurrency` 约束）
+与任务看板翻译（`todo.ts` 直接 `llm.stream`，**不经过并发队列**）。
+所以看板翻译与精炼同刻发生时会突破并发 1 —— 免费额度下这是 429 的来源之一。
+
+### 8.5 错误码直显（不必再翻日志）
+
+失败原因串本来就带码，只是被长 JSON 淹没、且只藏在 hover tooltip 里。
+现在 `errCodeOf()` 抽出短码直显：
+
+| 界面位置 | 显示 |
+|---|---|
+| 步骤卡失败行行尾 | 小徽章：`RATE_LIMIT 429` / `INVALID_REQUEST 400` / `UNKNOWN_MODEL` |
+| 整体摘要失败 | `整体摘要失败 · RATE_LIMIT 429` |
+| 视图页 / 面板段状态 | 徽章显示短码（原来是整句长文本） |
+| 看板「翻译为中文」按钮 | `翻译失败，点击重试 · RATE_LIMIT 429` |
+
+完整原因始终挂在 `title`（悬停可看）；抽不到码时不造假码、退回原文单行截断。
+宿主侧的任务翻译也改为把 `error` 回传界面（此前只 `console.error`，界面永远只说"失败"）。

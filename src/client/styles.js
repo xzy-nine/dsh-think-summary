@@ -172,4 +172,7 @@ const PANEL_CSS = `
 .ts-todo-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .ts-todo-btn:disabled{opacity:.45;cursor:default}
 .ts-todo-btn--busy:disabled{opacity:.7}
+.ts-todo-btn--fail:disabled{opacity:1;color:var(--dsw-alias-state-error-primary)}
+/* 失败段的短错误码（RATE_LIMIT 429 / INVALID_REQUEST 400 …）：不抢摘要的视觉重心 */
+.ts-proc-code{flex:none;color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-module-platform);border-radius:4px;padding:0 4px;font-size:10px;line-height:16px;white-space:nowrap;font-variant-numeric:tabular-nums}
 `

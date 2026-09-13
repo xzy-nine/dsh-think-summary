@@ -216,7 +216,9 @@ function makeThinkStepCard(official) {
       || (segments.length > 0 ? segments[segments.length - 1].summary : '')
     const headlineNote = think.summary !== undefined || !needsOverall
       ? ''
-      : (think.summaryReason ? '整体摘要失败' : '整体摘要生成中…')
+      : (think.summaryReason ? '整体摘要失败' + (errCodeOf(think.summaryReason) !== '' ? ' · ' + errCodeOf(think.summaryReason) : '') : '整体摘要生成中…')
+    // 整体摘要失败时，完整原因挂 title（码在面上、细节不丢）
+    const headlineNoteTitle = think.summaryReason || undefined
 
     const retry = async (index) => {
       const key = think.id + ':' + index
@@ -247,9 +249,15 @@ function makeThinkStepCard(official) {
       // 「再试」按钮默认隐藏、悬停该行才出现——保持"流式过程"的干净观感。
       const dim = !s.refined
       const title = (s.unrefinedReason ? s.unrefinedReason + '\n' : '') + s.summary
+      // 失败段的短错误码（RATE_LIMIT 429 / INVALID_REQUEST 400 …）：直接显示在行尾，
+      // 不必悬停或翻日志；完整原因仍在 title 里。
+      const code = !s.refined && !s.skipReason && s.kind !== 'self' ? errCodeOf(s.unrefinedReason) : ''
       return React.createElement(
         'div', { key, className: 'ts-proc-line', 'data-dim': dim ? 'true' : 'false' },
         React.createElement('span', { className: 'ts-proc-line-text', title }, s.summary),
+        code !== ''
+          ? React.createElement('span', { className: 'ts-proc-code', title: s.unrefinedReason }, code)
+          : null,
         needsRetry
           ? React.createElement('button', {
             type: 'button', className: 'ts-view-retry ts-proc-line-retry',
@@ -272,7 +280,7 @@ function makeThinkStepCard(official) {
         chevronEl('ts-proc-card-chevron'),
         // 第一行：整体摘要（加粗常显，类似思考链的"结论先行"）
         React.createElement('span', { className: 'ts-proc-headline' }, headline),
-        headlineNote !== '' ? React.createElement('span', { className: 'ts-proc-meta' }, headlineNote) : null,
+        headlineNote !== '' ? React.createElement('span', { className: 'ts-proc-meta', title: headlineNoteTitle }, headlineNote) : null,
       ),
       open ? React.createElement('div', { className: 'ts-proc-body' }, ...segEls) : null,
       msg ? React.createElement('div', { className: 'ts-view-msg' }, msg) : null,

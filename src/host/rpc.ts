@@ -8,7 +8,7 @@ import type { ThinkSummaryConfig } from './config.js'
  * 响应里，用来确认运行中的宿主究竟加载了哪一版代码（Host 模块被 ESM 缓存，
  * 补丁热重载只重建行、不重新 import 依赖，改 Host 代码必须重启 dsh）。
  */
-export const BUILD = '2026-09-13-max-tokens-clamp'
+export const BUILD = '2026-09-13-error-code-display'
 
 /** llm 服务的最小可用面（与 refine.ts 对齐，防御性类型）。 */
 interface LlmLike {
@@ -73,7 +73,10 @@ export function installRpc(
   getOptions?: () => ThinkSummaryConfig,
   refine?: RefineQueueLike | null,
   defaultModel?: () => { provider: string; model: string },
-  todoTranslate?: (contents: readonly unknown[], sessionId: string) => Promise<Record<string, string>>,
+  todoTranslate?: (
+    contents: readonly unknown[],
+    sessionId: string,
+  ) => Promise<{ translations: Record<string, string>; error?: string }>,
 ): void {
   const enabled = () => getOptions?.().enabled !== false
   // 模型目录缓存：供应商目录签名变化（注册/卸载）才重取，避免设置页每次打开重复查询
@@ -173,8 +176,8 @@ export function installRpc(
           const contents = Array.isArray(body?.contents) ? body.contents : []
           const sid = typeof body?.sessionId === 'string' ? body.sessionId : ''
           // 给什么翻什么：不在这里判断"哪些条目该翻"（由用户点按钮决定）
-          const translations = await todoTranslate(contents, sid)
-          writeJson(res, 200, { ok: true, translations })
+          const { translations, error } = await todoTranslate(contents, sid)
+          writeJson(res, 200, { ok: true, translations, ...error === undefined ? {} : { error } })
         } catch (error) {
           writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
         }

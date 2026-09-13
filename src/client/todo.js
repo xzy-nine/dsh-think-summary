@@ -79,7 +79,7 @@ function makeTodoTranslatedDock(official) {
     const todos = props.useProjection('todos')
     const [map, setMap] = React.useState({})
     const [busy, setBusy] = React.useState(false)
-    const [failed, setFailed] = React.useState(false)
+    const [failed, setFailed] = React.useState('')
     const contents = todoContents(todos)
     const pending = contents.filter((c) => typeof map[c] !== 'string' || map[c].length === 0)
     const sessionId = props.sessionId
@@ -87,7 +87,7 @@ function makeTodoTranslatedDock(official) {
     const onTranslate = () => {
       if (busy || pending.length === 0) return
       setBusy(true)
-      setFailed(false)
+      setFailed('')
       const run = async () => {
         try {
           const res = await fetch(TODO_ROUTE, {
@@ -98,12 +98,14 @@ function makeTodoTranslatedDock(official) {
           const json = res.ok ? await res.json() : null
           if (json && json.ok === true && json.translations) {
             setMap((prev) => Object.assign({}, prev, json.translations))
+            // 部分/全部失败时明确回显原因（含错误码），不静默
+            if (typeof json.error === 'string' && json.error.length > 0) setFailed(json.error)
           } else {
-            setFailed(true)
+            setFailed((json && (json.error || json.message)) || ('HTTP ' + res.status))
           }
         } catch (error) {
           console.warn('[dsh-think-summary] 任务看板翻译请求失败：', error)
-          setFailed(true)
+          setFailed(String((error && error.message) || error))
         } finally {
           setBusy(false)
         }
@@ -135,11 +137,12 @@ function makeTodoTranslatedDock(official) {
       panel,
       React.createElement('button', {
         type: 'button',
-        className: 'ts-todo-btn' + (busy ? ' ts-todo-btn--busy' : ''),
+        className: 'ts-todo-btn' + (busy ? ' ts-todo-btn--busy' : '') + (failed !== '' ? ' ts-todo-btn--fail' : ''),
         onClick: onTranslate,
         disabled: busy || pending.length === 0,
-        title: '把任务条目补上中文，原文保留；点一次翻一次，不自动翻译',
-      }, busy ? TODO_BTN_BUSY : failed ? TODO_BTN_FAIL : pending.length === 0 ? TODO_BTN_DONE : TODO_BTN_IDLE),
+        // 失败原因（含错误码）直接挂在 title 上，不用翻日志
+        title: failed !== '' ? failed : '把任务条目补上中文，原文保留；点一次翻一次，不自动翻译',
+      }, busy ? TODO_BTN_BUSY : failed !== '' ? TODO_BTN_FAIL + ' · ' + shortErr(failed) : pending.length === 0 ? TODO_BTN_DONE : TODO_BTN_IDLE),
     )
   }
 }
