@@ -30,7 +30,7 @@ import {
   type RefineTask,
 } from './summarize/refine.js'
 import { DEFAULT_TODO_PROMPT, TODO_USER_TEMPLATE, type ThinkSummaryConfig } from './config.js'
-import { formatModelRef, type ModelPoolManager } from './pool.js'
+import { formatModelRef, shouldDisableReasoning, type ModelPoolManager } from './pool.js'
 
 /** 单次翻译的条目上限（防一次塞太多把本地小模型撑爆）。 */
 export const MAX_TODO_ITEMS = 40
@@ -159,18 +159,19 @@ async function translateBatch(
       const ref = pool.pick()
       if (ref === undefined) break
       pool.acquire(ref)
+      // 与精炼同口径：用**已学到的**思考开关结论（不再每次试错）
+      const usedOff = shouldDisableReasoning(o.refineDisableReasoning === true, 0, pool.reasoningPreferenceOf(ref))
       try {
-        const map = await callOnce(llm, o, ref.provider, ref.model, targets)
-        pool.succeeded(ref)
+        const map = await callOnce(llm, o, ref.provider, ref.model, targets, usedOff)
+        pool.succeeded(ref, usedOff)
         return map
       } catch (error) {
         lastReason = error instanceof Error ? error.message : String(error)
-        const delay = pool.failed(ref)
+        pool.failed(ref, usedOff, lastReason)
         console.warn(
           '[dsh-think-summary] 任务看板翻译换模型重试：',
           formatModelRef(ref),
           lastReason,
-          '退避 ' + delay + 'ms',
         )
       } finally {
         pool.release(ref)
@@ -203,13 +204,14 @@ async function callOnce(
   provider: string,
   model: string,
   targets: readonly string[],
+  usedOff = false,
 ): Promise<Record<string, string>> {
   const input = targets.join('\n')
   // maxTokens 必须先收敛到供应商合法区间（未收敛时 st 会直接 400
   // "field MaxTokens invalid"）；关思考也只在该模型声明 off 档位时才发。
   const [cap, canOff] = await Promise.all([
     resolveOutputCap(llm, provider, model),
-    o.refineDisableReasoning === true ? canDisableReasoning(llm, provider, model) : Promise.resolve(false),
+    usedOff && o.refineDisableReasoning === true ? canDisableReasoning(llm, provider, model) : Promise.resolve(false),
   ])
   const stream = llm.stream({
     provider,

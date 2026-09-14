@@ -631,9 +631,9 @@ export class RefineQueue {
   ): Promise<void> {
     const outcome = await this.attemptViaPool(llm, pool, o, {
       // 段精炼：输入取段尾（按裁剪策略），并把"重新入队等待退避"接回精炼队列
-      run: (ref, attempt) => this.runRefine(
+      run: (ref, attempt, usedOff) => this.runRefine(
         llm, task, { provider: ref.provider, model: ref.model },
-        o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, attempt,
+        o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, attempt, usedOff,
       ),
       budgetOf: () => task.attempts ?? 0,
       noteRequeue: (next) => { task.attempts = next },
@@ -668,7 +668,7 @@ export class RefineQueue {
     pool: ModelPool,
     o: RefineOptions,
     opts: {
-      run: (ref: ModelRef, attempt: number) => Promise<{ text: string; inputTokens: number }>
+      run: (ref: ModelRef, attempt: number, usedOff: boolean) => Promise<{ text: string; inputTokens: number }>
       budgetOf: () => number
       noteRequeue: (next: number) => void
       requeue: () => void
@@ -704,36 +704,37 @@ export class RefineQueue {
       }
       lastRef = ref
       pool.acquire(ref)
-      // 自动开关思考：同一个模型最多试两次（先不带 reasoningEffort，失败后再带）。
-      // 这样"没关思考导致预算被推理烧光"的模型能自己救回来，而不必用户手配。
-      const tries = o.disableReasoning === true ? 2 : 1
+      // 自动开关思考（**带记忆**）：已学到的结论直接照用，只有没试出结论时才探测。
+      // 关键：不能每次都从"先不带"重来——会思考的模型不带 reasoningEffort 实测要
+      // 15~25s，带了只要 ~1s，每次白烧一遍就是"比单模型还慢"的根因。
+      const preference = pool.reasoningPreferenceOf(ref)
+      const tries = o.disableReasoning === true && preference === 'undecided' ? 2 : 1
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         for (let variant = 0; variant < tries; variant++) {
           const modelAttempt = pool.attemptsOf(ref)
+          // 本次是否发送 reasoningEffort（决定权交给池子：已学到的结论优先）
+          const usedOff = shouldDisableReasoning(o.disableReasoning === true, modelAttempt, preference)
           try {
             const res = await Promise.race([
-              opts.run(ref, modelAttempt),
+              opts.run(ref, modelAttempt, usedOff),
               new Promise<never>((_, reject) => {
                 timer = setTimeout(() => reject(new Error('timeout after ' + timeoutMs + 'ms')), timeoutMs)
               }),
             ])
             if (res && res.text.length > 0) {
-              pool.succeeded(ref)
+              pool.succeeded(ref, usedOff)
               return { ok: true, text: res.text, inputTokens: res.inputTokens }
             }
           } catch (error) {
             lastReason = error instanceof Error ? error.message : String(error)
-            pool.noteAttempt(ref) // 下次这个模型带 reasoningEffort 再试
+            pool.noteAttempt(ref) // 下次这个模型换一种开关再试（仅在未试出结论时）
             if (variant === tries - 1) {
-              // 同一模型的第二次尝试不写失败统计：那是"自动开关"的一次拨动，
-              // 不是模型不可用（否则状态色会把可用模型误判成红）
-              const delay = pool.failed(ref)
+              pool.failed(ref, usedOff, lastReason)
               // eslint-disable-next-line no-console
               console.warn(
                 '[dsh-think-summary] ' + opts.logLabel + ' attempt failed, backing off:',
-                formatModelRef(ref), lastReason, '退避 ' + delay + 'ms',
-                '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
+                formatModelRef(ref), lastReason, '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
               )
             } else {
               // eslint-disable-next-line no-console
@@ -766,6 +767,7 @@ export class RefineQueue {
     maxInputTokens: number,
     outputTokens: number,
     attempt = 0,
+    usedOff = false,
   ): Promise<{ text: string; inputTokens: number }> {
     // 探测确认（probe-notes.md §M3）：content 必须是内容块（字符串会被拒）；system 走顶层字段。
     const trimMode = this.getOptions().trim
@@ -776,7 +778,7 @@ export class RefineQueue {
           ? task.text
           : headTailTrim(task.text, maxInputTokens)
     const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().refinePrompt ?? DEFAULT_REFINE_PROMPT,
-      REFINE_USER_TEMPLATE.replace('{text}', inputText), attempt)
+      REFINE_USER_TEMPLATE.replace('{text}', inputText), attempt, usedOff)
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }
@@ -787,17 +789,17 @@ export class RefineQueue {
    * `maxTokens` 必须先收敛：llm 会把它原样发给供应商，各家各有合法区间
    * （商汤：`field MaxTokens invalid, should be in [1, 384000]`）。
    *
-   * **自动开关思考**（`attempt`）：同一个模型的第 1 次尝试**不带** `reasoningEffort`
-   * （先按供应商默认），失败重试时才带 `reasoningEffort: 'off'`——这样既不必
-   * 用户为每个模型猜"能不能关思考"，又能在"没关思考导致预算被推理耗尽"时自动救回来。
-   * 仍然叠加 `canDisableReasoning` 兜底：模型没声明 off 档位时绝不发送
-   * （llm 对未声明档位直接抛错，发了会把本来可用的路由打挂）。
+   * **关闭思考由调用方决定**（`wantOff`）：池子会结合"该模型学到的结论"给出，
+   * 已学到"带 off 可靠"的模型直接走快路径（实测不带要 15~25s、带了 ~1s），
+   * 不再每次任务都从零试错。这里仍叠加 `canDisableReasoning` 兜底：模型没声明
+   * off 档位时绝不发送（llm 对未声明档位直接抛错，发了会把本来可用的路由打挂）。
    * @param llm - llm 服务。
    * @param route - 解析后的 provider/model。
    * @param outputTokens - 用户配置的输出预算。
    * @param system - system 提示词。
    * @param userText - user 消息正文。
-   * @param attempt - 该模型本轮第几次尝试（从 0 起）；>0 才尝试关思考。
+   * @param attempt - 该模型本轮第几次尝试（从 0 起）。
+   * @param wantOff - 本次是否希望关闭思考（由池子按已学到的结论决定）。
    * @returns 模型流。
    */
   private async buildRequest(
@@ -807,9 +809,9 @@ export class RefineQueue {
     system: string,
     userText: string,
     attempt = 0,
+    wantOff = false,
   ): Promise<AsyncIterable<{ type?: string; text?: string }>> {
-    const o = this.getOptions()
-    const wantOff = shouldDisableReasoning(o.disableReasoning === true, attempt)
+    void attempt
     const [cap, canOff] = await Promise.all([
       resolveOutputCap(llm, route.provider, route.model),
       wantOff ? canDisableReasoning(llm, route.provider, route.model) : Promise.resolve(false),
@@ -820,7 +822,7 @@ export class RefineQueue {
       maxTokens: clampOutputTokens(outputTokens, cap),
       // 摘要任务要稳定：不要采样发散（温度 0）
       temperature: 0,
-      // 自动开关：首次不带，重试时带（且仅在该模型声明了 off 档位时）
+      // 已学到该模型能关思考就带（快路径）；没声明 off 档位的模型绝不含糊发出去
       ...canOff ? { reasoningEffort: 'off' } : {},
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
@@ -838,10 +840,11 @@ export class RefineQueue {
     maxInputTokens: number,
     outputTokens: number,
     attempt = 0,
+    usedOff = false,
   ): Promise<{ text: string; inputTokens: number }> {
     const inputText = headTailTrim(task.text, maxInputTokens)
     const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().thinkPrompt ?? DEFAULT_THINK_PROMPT,
-      THINK_USER_TEMPLATE.replace('{text}', inputText), attempt)
+      THINK_USER_TEMPLATE.replace('{text}', inputText), attempt, usedOff)
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }
@@ -870,9 +873,9 @@ export class RefineQueue {
       const pool = this.pools?.current()
       if (pool !== undefined && pool.size > 0) {
         const outcome = await this.attemptViaPool(llm, pool, o, {
-          run: (ref, attempt) => this.runThinkRefine(
+          run: (ref, attempt, usedOff) => this.runThinkRefine(
             llm, routeTask, { provider: ref.provider, model: ref.model },
-            o.maxInputTokens ?? 800, o.outputTokens ?? 512, attempt,
+            o.maxInputTokens ?? 800, o.outputTokens ?? 512, attempt, usedOff,
           ),
           budgetOf: () => task.attempts ?? 0,
           noteRequeue: (next) => { task.attempts = next },

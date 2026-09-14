@@ -532,7 +532,9 @@ check('颜色门槛常量 = 5', MIN_ATTEMPTS_FOR_COLOR, 5)
   s1.flush()
   // 模拟重启：新实例从磁盘恢复
   const s2 = new PoolStats(dir)
-  check('重启后统计仍在（成功/失败都恢复）', [s2.get('st/a'), s2.get('st/b')], [{ ok: 2, fail: 1 }, { ok: 0, fail: 1 }])
+  check('重启后统计仍在（成功/失败都恢复）',
+    [s2.get('st/a')?.ok, s2.get('st/a')?.fail, s2.get('st/b')?.ok, s2.get('st/b')?.fail],
+    [2, 1, 0, 1])
   check('累计后可判定颜色（3/3 样本不足仍是 unknown）', healthOf(s2.get('st/a')), 'unknown')
   s2.recordOk('st/a')
   s2.recordOk('st/a')
@@ -558,8 +560,87 @@ check('颜色门槛常量 = 5', MIN_ATTEMPTS_FOR_COLOR, 5)
   pool.succeeded(a)
   pool.failed(a)
   stats.flush()
-  check('池子的 success/fail 会写进统计', new PoolStats(dir).get('st/a'), { ok: 1, fail: 1 })
+  check('池子的 success/fail 会写进统计', [new PoolStats(dir).get('st/a')?.ok, new PoolStats(dir).get('st/a')?.fail], [1, 1])
   rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 13. 记住思考开关（不能每次任务都从零试错） ──────────────────────────────
+check('未试出时：首次不带、重试才带（探测）',
+  [shouldDisableReasoning(true, 0, 'undecided'), shouldDisableReasoning(true, 1, 'undecided')],
+  [false, true])
+check('已学到"带 off 可靠" → 每次都带（快路径，不再白烧 15~25s）',
+  [shouldDisableReasoning(true, 0, 'off'), shouldDisableReasoning(true, 1, 'off'), shouldDisableReasoning(true, 5, 'off')],
+  [true, true, true])
+check('已学到"不能带" → 永不带',
+  [shouldDisableReasoning(true, 0, 'on'), shouldDisableReasoning(true, 3, 'on')],
+  [false, false])
+check('配置关闭 → 任何结论都不带',
+  [shouldDisableReasoning(false, 0, 'off'), shouldDisableReasoning(false, 3, 'off')],
+  [false, false])
+
+// 学到的结论跨进程持久化
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ts-pref-'))
+  const s1 = new PoolStats(dir)
+  s1.recordOk('st/x', true) // 带 reasoningEffort 成功
+  s1.flush()
+  check('带 off 成功 → 记住 off（跨进程）', new PoolStats(dir).reasoningPreference('st/x'), 'off')
+
+  const s2 = new PoolStats(dir)
+  s2.recordFail('st/y', true, 'ollma/m error：INVALID_REQUEST 400: bad field')
+  s2.flush()
+  check('带 off 被明确拒绝 → 记住不要带', new PoolStats(dir).reasoningPreference('st/y'), 'on')
+
+  const s3 = new PoolStats(dir)
+  check('无记录 → undecided（继续探测）', s3.reasoningPreference('st/never'), 'undecided')
+  // 老版本文件（无 reasoning 字段）读入后仍是 undecided，不会误判
+  writeFileSync(join(dir, 'dsh-think-summary-pool.json'),
+    JSON.stringify({ version: 1, stats: { 'st/old': { ok: 3, fail: 1 } } }), 'utf8')
+  check('老统计文件缺 reasoning 字段 → undecided（兼容）', new PoolStats(dir).reasoningPreference('st/old'), 'undecided')
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 14. 低成功率模型降频（成功也不清零冷却） ────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ts-cool-'))
+  const stats = new PoolStats(dir)
+  const mk = (refs, now) => new ModelPool(parseModelPool(refs), {
+    perModelConcurrency: 1, backoffBaseMs: 1000, backoffMaxMs: 8000, stats, now,
+  })
+  // 造出 26% 成功率的模型（27 次失败 / 10 次成功）
+  for (let i = 0; i < 10; i++) stats.recordOk('st/bad')
+  for (let i = 0; i < 27; i++) stats.recordFail('st/bad')
+  // 高成功率模型（99%）
+  for (let i = 0; i < 99; i++) stats.recordOk('st/good')
+  stats.recordFail('st/good')
+
+  let t = 0
+  const pool = mk(['st/bad', 'st/good'], () => t)
+  const bad = { provider: 'st', model: 'bad' }
+  const good = { provider: 'st', model: 'good' }
+  check('高成功率模型无冷却', pool.cooldownFor(good), 0)
+  check('低成功率模型有冷却（10/37 ≈ 27% → base×(1+失败率)）',
+    pool.cooldownFor(bad), Math.round(30000 * (1 + (1 - 10 / 37))))
+  check('成功率越低冷却越长', pool.cooldownFor(bad) > pool.cooldownFor({ provider: 'st', model: 'good' }), true)
+
+  // 成功一次后低成功率模型进入冷却（成功不清零），高成功率模型不受影响
+  pool.succeeded(bad)
+  check('低成功率模型成功后仍在冷却（关键：成功不清零）', pool.isCooling(bad), true)
+  pool.succeeded(good)
+  check('高成功率模型成功后可立即再用', pool.isCooling(good), false)
+  t += 60000
+  check('冷却到期后恢复可取用', pool.isCooling(bad), false)
+
+  // 一次没成功过的模型冷却最长（2×base）
+  const dir2 = mkdtempSync(join(tmpdir(), 'ts-cool2-'))
+  const stats2 = new PoolStats(dir2)
+  for (let i = 0; i < 6; i++) stats2.recordFail('st/dead')
+  const pool2 = new ModelPool(parseModelPool(['st/dead']), {
+    perModelConcurrency: 1, backoffBaseMs: 1000, backoffMaxMs: 8000, stats: stats2, now: () => 0,
+  })
+  check('一次没成功过 → 冷却封顶 2×base', pool2.cooldownFor({ provider: 'st', model: 'dead' }), 60000)
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir2, { recursive: true, force: true })
 }
 
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)

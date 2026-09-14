@@ -18,7 +18,26 @@ export interface ModelStat {
   ok: number
   /** 失败次数（含超时/限流/格式不合规）。 */
   fail: number
+  /**
+   * 该模型**带 `reasoningEffort` 请求**的成功/失败次数。
+   *
+   * 用来"记住"思考开关：不必每次任务都从"先不带"试错一遍。
+   * 老版本统计文件没有这两个字段，读入时按 0 处理。
+   */
+  offOk?: number
+  /** 该模型**带 `reasoningEffort` 请求**的失败次数。 */
+  offFail?: number
+  /**
+   * 学到的结论（跨进程记住）：
+   *  - `'off'`  ：带 `reasoningEffort` 可靠（走快路径，别思考）
+   *  - `'on'`   ：不能带（该模型/供应商拒收，或带了必失败）
+   *  - `'undecided'`：还没试出结论（需继续探测）
+   */
+  reasoning?: ReasoningPreference
 }
+
+/** 思考开关的学习结论。 */
+export type ReasoningPreference = 'off' | 'on' | 'undecided'
 
 /** 统计表：`provider/model` → 累计计数。 */
 export type PoolStatsMap = Record<string, ModelStat>
@@ -83,11 +102,16 @@ export class PoolStats {
       const out: PoolStatsMap = {}
       for (const [key, value] of Object.entries(json.stats as Record<string, unknown>)) {
         if (value === null || typeof value !== 'object') continue
-        const v = value as { ok?: unknown; fail?: unknown }
+        const v = value as { ok?: unknown; fail?: unknown; offOk?: unknown; offFail?: unknown; reasoning?: unknown }
         const ok = typeof v.ok === 'number' && Number.isFinite(v.ok) && v.ok > 0 ? Math.floor(v.ok) : 0
         const fail = typeof v.fail === 'number' && Number.isFinite(v.fail) && v.fail > 0 ? Math.floor(v.fail) : 0
         if (ok === 0 && fail === 0) continue
-        out[key] = { ok, fail }
+        const offOk = typeof v.offOk === 'number' && Number.isFinite(v.offOk) && v.offOk > 0 ? Math.floor(v.offOk) : 0
+        const offFail = typeof v.offFail === 'number' && Number.isFinite(v.offFail) && v.offFail > 0 ? Math.floor(v.offFail) : 0
+        // 老版本文件没有 reasoning 字段 → undecided（继续探测）
+        const reasoning: ReasoningPreference =
+          v.reasoning === 'off' || v.reasoning === 'on' ? v.reasoning : 'undecided'
+        out[key] = { ok, fail, offOk, offFail, reasoning }
       }
       this.map = out
     } catch {
@@ -98,33 +122,62 @@ export class PoolStats {
   /**
    * 记一次成功。
    * @param key - `provider/model`。
+   * @param usedReasoningOff - 这次请求是否带了 `reasoningEffort`（用于学习思考开关）。
    */
-  recordOk(key: string): void {
-    const cur = this.map[key] ?? { ok: 0, fail: 0 }
-    this.map[key] = { ok: cur.ok + 1, fail: cur.fail }
+  recordOk(key: string, usedReasoningOff = false): void {
+    const cur = this.map[key] ?? { ok: 0, fail: 0, offOk: 0, offFail: 0, reasoning: 'undecided' as const }
+    const next: ModelStat = { ...cur, ok: cur.ok + 1 }
+    if (usedReasoningOff) {
+      next.offOk = (cur.offOk ?? 0) + 1
+      // 带 reasoningEffort 成功过 → 记住这条路可靠（不再每次试错）
+      next.reasoning = 'off'
+    }
+    this.map[key] = next
     this.scheduleFlush()
   }
 
   /**
    * 记一次失败。
    * @param key - `provider/model`。
+   * @param usedReasoningOff - 这次请求是否带了 `reasoningEffort`。
+   * @param failureReason - 失败原因（用于区分"带 off 被拒"与普通失败）。
    */
-  recordFail(key: string): void {
-    const cur = this.map[key] ?? { ok: 0, fail: 0 }
-    this.map[key] = { ok: cur.ok, fail: cur.fail + 1 }
+  recordFail(key: string, usedReasoningOff = false, failureReason = ''): void {
+    const cur = this.map[key] ?? { ok: 0, fail: 0, offOk: 0, offFail: 0, reasoning: 'undecided' as const }
+    const next: ModelStat = { ...cur, fail: cur.fail + 1 }
+    if (usedReasoningOff) {
+      next.offFail = (cur.offFail ?? 0) + 1
+      // 带 reasoningEffort 被明确拒绝（400/不支持档位）→ 记住不要带
+      if (/INVALID_REQUEST|UNSUPPORTED_REASONING_EFFORT|400/.test(failureReason) && (cur.offOk ?? 0) === 0) {
+        next.reasoning = 'on'
+      }
+    } else if (next.reasoning === 'off' && (next.offOk ?? 0) > 0) {
+      // 已经知道"带 off 可靠"，这次不带却失败 → 说明该带，保持 off
+      next.reasoning = 'off'
+    }
+    this.map[key] = next
     this.scheduleFlush()
   }
 
   /** 某模型的统计（副本；未记录时 undefined）。 */
   get(key: string): ModelStat | undefined {
     const hit = this.map[key]
-    return hit === undefined ? undefined : { ok: hit.ok, fail: hit.fail }
+    return hit === undefined ? undefined : { ...hit }
+  }
+
+  /**
+   * 学到的思考开关结论（跨进程记住；没记录 = undecided）。
+   * @param key - `provider/model`。
+   * @returns 'off'（带 reasoningEffort）/ 'on'（不带）/ 'undecided'（未试出）。
+   */
+  reasoningPreference(key: string): ReasoningPreference {
+    return this.map[key]?.reasoning ?? 'undecided'
   }
 
   /** 全量统计（副本，供 RPC 发给设置页）。 */
   all(): PoolStatsMap {
     const out: PoolStatsMap = {}
-    for (const [key, value] of Object.entries(this.map)) out[key] = { ok: value.ok, fail: value.fail }
+    for (const [key, value] of Object.entries(this.map)) out[key] = { ...value }
     return out
   }
 

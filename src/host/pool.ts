@@ -37,6 +37,14 @@ interface PoolEntry {
   failed: number
   /** 该模型在本轮任务里已尝试次数（自动开关思考的重试计数）。 */
   attempts: number
+  /**
+   * 下次可取用的最早时刻（**低成功率模型的"降频"冷却**）。
+   *
+   * 与 `blockedUntil`（连续失败的指数退避）不同：这个只看**累计成功率**，
+   * 成功也不会清零——26% 成功率的模型不该被同等频繁地轮转到
+   * （否则它每次成功都会抹掉失败计数，永远得不到"少叫我"的待遇）。
+   */
+  cooldownUntil: number
 }
 /** 池子选项。 */
 export interface ModelPoolOptions {
@@ -55,10 +63,17 @@ export interface ModelPoolOptions {
 /** 统计口的窄接口（避免 pool.ts 依赖 pool-stats 的具体实现）。 */
 export interface PoolStatsLike {
   /** 记一次成功。 */
-  recordOk(key: string): void
+  recordOk(key: string, usedReasoningOff?: boolean): void
   /** 记一次失败。 */
-  recordFail(key: string): void
+  recordFail(key: string, usedReasoningOff?: boolean, failureReason?: string): void
+  /** 学到的思考开关结论（跨进程记住）。 */
+  reasoningPreference?(key: string): ReasoningPreference
+  /** 累计统计（用于按成功率拉长低效模型的间隔）。 */
+  get?(key: string): { ok: number; fail: number } | undefined
 }
+
+/** 思考开关的学习结论（与 pool-stats 的 ReasoningPreference 同形）。 */
+export type ReasoningPreference = 'off' | 'on' | 'undecided'
 
 /** 池子的只读快照（诊断/测试用）。 */
 export interface PoolSnapshot {
@@ -70,6 +85,8 @@ export interface PoolSnapshot {
     model: string
     inFlight: number
     blockedMs: number
+    /** 低成功率降频冷却剩余毫秒。 */
+    cooldownMs: number
     failures: number
     succeeded: number
     failed: number
@@ -81,24 +98,46 @@ export const POOL_DEFAULTS = {
   perModelConcurrency: 1,
   backoffBaseMs: 2000,
   backoffMaxMs: 60_000,
+  /**
+   * 低成功率模型的降频冷却基数（毫秒）。
+   *
+   * 成功率 <50% 的模型每次被用后休息一段时间，成功率越低休息越久：
+   * 冷却 = base × (1 + 失败率)。50% → 1×base；26% → 1.74×base；
+   * 0%（一次没成功）→ 2×base。这样低效模型仍会被用到（不至于饿死），
+   * 但调用频率被压下来，把机会让给高成功率模型。
+   */
+  lowRateCooldownBaseMs: 30_000,
+  /** 冷却上限（毫秒）。 */
+  lowRateCooldownMaxMs: 300_000,
 } as const
 
 /**
  * 该模型这次是否要**关掉思考**（`reasoningEffort: 'off'`）。
  *
- * 自动开关重试的核心：用户开着「关闭思考」但某个模型不认这个字段时，
- * 第一次尝试不带它、失败后再带它试一次（或反过来），即可自动适配两种供应商，
- * 不需要用户为每个模型手配。规则：
+ * 自动开关重试的核心：用户开着「关闭思考」但某模型不认这个字段时，
+ * 第一次不带、失败后再带，即可自动适配两种供应商，不必逐个手配。
+ *
+ * **必须"记住"结论**（`preference`）：否则每个新任务都从零试错一遍——
+ * 实测会思考的模型不带 `reasoningEffort` 要 15~25s，带了只要 ~1s，每次都先
+ * 白烧一遍就是"比单模型还慢"的根因。规则：
  *  - 配置关闭 → 永不发送；
- *  - 第 1 次尝试（attempt 0）→ 不带（保守：先按供应商默认跑）；
- *  - 之后 → 带（上次失败可能正是因为"没关思考导致预算被推理耗尽"）。
+ *  - 已学到 `'off'` → 直接带（快路径，不再试错）；
+ *  - 已学到 `'on'`  → 永不带；
+ *  - 未试出（`'undecided'`）→ 第 1 次不带（保守），失败后带上（探测）；
  * @param disableReasoning - 配置是否要求关思考。
  * @param attempt - 本次是该模型的第几次尝试（从 0 起）。
+ * @param preference - 该模型已学到的结论（跨进程记住）。
  * @returns 是否发送 `reasoningEffort`。
  */
-export function shouldDisableReasoning(disableReasoning: boolean, attempt: number): boolean {
+export function shouldDisableReasoning(
+  disableReasoning: boolean,
+  attempt: number,
+  preference: ReasoningPreference = 'undecided',
+): boolean {
   if (!disableReasoning) return false
-  return attempt > 0
+  if (preference === 'off') return true // 已验证可靠：永远走快路径
+  if (preference === 'on') return false // 已验证会被拒：别发
+  return attempt > 0 // 未试出：首次不带，失败后带一次来探测
 }
 
 /**
@@ -163,7 +202,9 @@ export class ModelPool {
    * @param options - 并发与退避参数。
    */
   constructor(refs: readonly ModelRef[], options: ModelPoolOptions) {
-    this.entries = refs.map((ref) => ({ ref, inFlight: 0, blockedUntil: 0, failures: 0, succeeded: 0, failed: 0, attempts: 0 }))
+    this.entries = refs.map((ref) => ({
+      ref, inFlight: 0, blockedUntil: 0, failures: 0, succeeded: 0, failed: 0, attempts: 0, cooldownUntil: 0,
+    }))
     this.perModel = Math.max(1, Math.floor(options.perModelConcurrency))
     this.backoffBase = Math.max(0, options.backoffBaseMs)
     this.backoffMax = Math.max(this.backoffBase, options.backoffMaxMs)
@@ -182,7 +223,7 @@ export class ModelPool {
   }
 
   /**
-   * 取下一个可用模型：从游标起顺序找第一个"未退避且未满载"的。
+   * 取下一个可用模型：从游标起顺序找第一个"未退避、未冷却且未满载"的。
    * @returns 可用的模型引用；全部不可用时 undefined。
    */
   pick(): ModelRef | undefined {
@@ -194,6 +235,7 @@ export class ModelPool {
       const entry = this.entries[index]
       if (entry === undefined) continue
       if (entry.blockedUntil > at) continue
+      if (entry.cooldownUntil > at) continue // 低成功率降频：还在冷却
       if (entry.inFlight >= this.perModel) continue
       // 命中即推进游标：下一轮从它的下一个开始，保证真正轮转
       this.cursor = (index + 1) % n
@@ -214,32 +256,63 @@ export class ModelPool {
     if (entry) entry.inFlight = Math.max(0, entry.inFlight - 1)
   }
 
-  /** 记一次成功：清空该模型的退避等级。 */
-  succeeded(ref: ModelRef): void {
+  /** 记一次成功：清空退避等级，并按累计成功率决定是否降频。 */
+  succeeded(ref: ModelRef, usedReasoningOff = false): void {
     const entry = this.find(ref)
     if (!entry) return
     entry.succeeded++
     entry.failures = 0
     entry.blockedUntil = 0
-    // 单次尝试序号归零：下次这个模型又从"不带 reasoningEffort"开始试
+    // 单次尝试序号归零：该模型下次从"已学到的结论"重新开始判断
     entry.attempts = 0
-    this.stats?.recordOk(formatModelRef(ref))
+    this.stats?.recordOk(formatModelRef(ref), usedReasoningOff)
+    // 低成功率降频：成功也**不清零冷却**（否则 26% 的模型每次成功就重获满额机会）
+    entry.cooldownUntil = this.now() + this.cooldownFor(ref)
   }
 
   /**
    * 记一次失败：该模型进入指数退避，期间不被取用。
    * @param ref - 失败的模型。
+   * @param usedReasoningOff - 这次是否带了 `reasoningEffort`（用于学习开关）。
+   * @param failureReason - 失败原因（区分"带 off 被拒"与普通失败）。
    * @returns 本次退避时长（毫秒），供日志/诊断。
    */
-  failed(ref: ModelRef): number {
+  failed(ref: ModelRef, usedReasoningOff = false, failureReason = ''): number {
     const entry = this.find(ref)
     if (!entry) return 0
     entry.failed++
     entry.failures++
     const delay = Math.min(this.backoffBase * Math.pow(2, entry.failures - 1), this.backoffMax)
     entry.blockedUntil = this.now() + delay
-    this.stats?.recordFail(formatModelRef(ref))
+    this.stats?.recordFail(formatModelRef(ref), usedReasoningOff, failureReason)
     return delay
+  }
+
+  /**
+   * 该模型下次取用前的降频冷却（毫秒）。
+   *
+   * 只按**累计成功率**算（跨进程统计），与连续失败退避相互独立：
+   *  - 成功率 ≥50%：不冷却（0）——好用的模型尽情用；
+   *  - <50%：冷却 = base × (1 + 失败率)，成功率越低越久（封顶）。
+   * @param ref - 模型引用。
+   * @returns 冷却毫秒数。
+   */
+  cooldownFor(ref: ModelRef): number {
+    const stat = this.stats?.get?.(formatModelRef(ref))
+    if (stat === undefined) return 0
+    const ok = stat.ok > 0 ? stat.ok : 0
+    const fail = stat.fail > 0 ? stat.fail : 0
+    const total = ok + fail
+    if (total === 0) return 0
+    const rate = ok / total
+    if (rate >= 0.5) return 0 // 高成功率：不降频
+    const delay = POOL_DEFAULTS.lowRateCooldownBaseMs * (1 + (1 - rate))
+    return Math.min(Math.round(delay), POOL_DEFAULTS.lowRateCooldownMaxMs)
+  }
+
+  /** 该模型学到的思考开关结论（跨进程记住；无统计时为 undecided）。 */
+  reasoningPreferenceOf(ref: ModelRef): ReasoningPreference {
+    return this.stats?.reasoningPreference?.(formatModelRef(ref)) ?? 'undecided'
   }
 
   /**
@@ -258,7 +331,7 @@ export class ModelPool {
   }
 
   /**
-   * 距下一个模型可用的等待时间（全部在退避/满载时用于安排重试）。
+   * 距下一个模型可用的等待时间（退避/降频冷却/满载时用于安排重试）。
    * @returns 毫秒；无模型或已有可用模型时为 0。
    */
   nextWakeMs(): number {
@@ -267,7 +340,7 @@ export class ModelPool {
     let best = Number.POSITIVE_INFINITY
     for (const entry of this.entries) {
       if (entry.inFlight >= this.perModel) continue // 满载：靠 release 触发，不靠定时器
-      const wait = entry.blockedUntil - at
+      const wait = Math.max(entry.blockedUntil, entry.cooldownUntil) - at
       if (wait <= 0) return 0 // 有可用模型
       if (wait < best) best = wait
     }
@@ -280,6 +353,12 @@ export class ModelPool {
     return entry !== undefined && entry.blockedUntil > this.now()
   }
 
+  /** 该模型当前是否在**降频冷却**中（低成功率；与退避相互独立）。 */
+  isCooling(ref: ModelRef): boolean {
+    const entry = this.find(ref)
+    return entry !== undefined && entry.cooldownUntil > this.now()
+  }
+
   /** 快照（诊断/测试用）。 */
   snapshot(): PoolSnapshot {
     const at = this.now()
@@ -290,6 +369,7 @@ export class ModelPool {
         model: e.ref.model,
         inFlight: e.inFlight,
         blockedMs: Math.max(0, e.blockedUntil - at),
+        cooldownMs: Math.max(0, e.cooldownUntil - at),
         failures: e.failures,
         succeeded: e.succeeded,
         failed: e.failed,
