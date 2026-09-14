@@ -166,6 +166,66 @@ check('整体摘要同样受中文硬校验',
   ]),
   { kind: 'think-failed', reason: 'ollma/qwen3.5:4b 摘要不是中文：「I am fixing the baseURL 404」' })
 
+// ── 6.5 整体摘要也必须走模型池（此前漏接，第二遍绕过池子走单模型） ──────────
+{
+  // 池子里只有 st/a；注入池子后，整体摘要必须请求 st/a，而不是配置里的 ollma
+  const results = []
+  const seen = []
+  const q = new RefineQueue(
+    () => ({ enabled: true, provider: 'ollma', model: 'qwen3.5:4b' }),
+    () => ({
+      stream: (opts) => {
+        seen.push(opts.provider + '/' + opts.model)
+        return (async function* () {
+          yield { type: 'text-delta', text: '我在核对第二遍摘要是否走池子。' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    }),
+    () => results.push({ kind: 'segment' }),
+    () => results.push({ kind: 'segment-failed' }),
+    (_s, _t, summary) => results.push({ kind: 'think', summary }),
+    (_s, _t, reason) => results.push({ kind: 'think-failed', reason }),
+  )
+  q.usePool(new ModelPoolManager(() => parseModelPool(['st/a']), () => 1))
+  q.enqueueThink({
+    sessionId: 's', thinkId: 't', provider: 'ollama', fallbackModel: 'm',
+    segments: ['我正在核对 baseURL。', '已确认 404 来自路径拼接。'],
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  check('整体摘要走模型池（请求落在池内模型，而非配置的单模型）',
+    [seen, results[0]],
+    [['st/a'], { kind: 'think', summary: '我在核对第二遍摘要是否走池子。' }])
+}
+
+// 整体摘要与段精炼共用池子 → 失败原因（含错误码）写回 think
+{
+  const results = []
+  const q = new RefineQueue(
+    () => ({ enabled: true, provider: 'ollma', model: 'qwen3.5:4b', poolMaxAttempts: 1 }),
+    () => ({
+      stream: () => (async function* () {
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'rpm exhausted' } } }
+      })(),
+    }),
+    () => results.push({ kind: 'segment' }),
+    () => results.push({ kind: 'segment-failed' }),
+    (_s, _t, summary) => results.push({ kind: 'think', summary }),
+    (_s, _t, reason) => results.push({ kind: 'think-failed', reason }),
+  )
+  q.usePool(new ModelPoolManager(() => parseModelPool(['st/a']), () => 1))
+  q.enqueueThink({
+    sessionId: 's', thinkId: 't', provider: 'ollama', fallbackModel: 'm',
+    segments: ['段一。', '段二。'],
+  })
+  // 等防抖 1.2s + 一轮尝试；poolMaxAttempts=1 时不进入换模型重投，快速失败
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  const failed = results.find((r) => r.kind === 'think-failed')
+  check('整体摘要失败会写回原因（含错误码）',
+    /RATE_LIMIT/.test((failed || {}).reason || ''),
+    true)
+}
+
 // ── 6.5 输出预算收敛与关思考能力探测（供应商 400 的真实根因） ────────────────
 /** 假 llm：只提供 resolveModelInfo。 */
 const infoLlm = (info) => ({ stream: () => (async function* () {})(), resolveModelInfo: async () => info })

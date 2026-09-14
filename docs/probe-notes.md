@@ -339,3 +339,23 @@ pi-ai 的 `describableReasoningLevel` 注释写明：`off` 会被翻译成**省�
 | 其余 8 个（商汤 2 + NVIDIA 6） | 200，保留 |
 
 池子从 14 个精简到 **8 个**（全是实测可用的）。
+
+### 8.10 整体摘要漏接池子（补）
+
+§8.6 只把池子接进了段精炼（`runOne`），**第二遍整体摘要 `runThink` 仍走
+`resolveRefineRoute` 单模型路径**——症状是：池子里的模型限流时整体摘要单独失败，
+且它不参与状态色统计（气泡颜色只反映段精炼）。
+
+修法：把池子取用逻辑抽成 **`attemptViaPool` 公共引擎**（轮转 / 每模型并发 /
+指数退避 / 自动开关思考 / 有界重投），段精炼与整体摘要各传自己的 `run` 回调：
+
+```
+runViaPool → attemptViaPool(run: runRefine,       requeue: () => this.queue)
+runThink   → attemptViaPool(run: runThinkRefine,  requeue: () => this.thinkQueue)
+```
+
+两处都保留"池子为空 → 回退单模型"的分支，所以没配池子的用户行为不变。
+
+**回归测试要点**：直接断言整体摘要的请求落在**池内模型**（注入只含 `st/a` 的池子，
+断言 `llm.stream` 收到的 provider/model 是 `st/a`，而不是配置里的 `ollama`）。
+只断言"代码能编译/函数被调用"抓不到这种漏接——这正是它此前没被发现的原因。

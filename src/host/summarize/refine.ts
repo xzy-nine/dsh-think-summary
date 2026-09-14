@@ -126,6 +126,8 @@ interface ThinkTask {
   fallbackModel: string
   /** 分段摘要拼接后的输入。 */
   text: string
+  /** 重投轮数（模型池模式下换模型重试时累加，决定何时放弃）。 */
+  attempts?: number
 }
 
 /** 整体摘要防抖窗口（毫秒）：长思考的段摘要陆续产出，只保留最后一次。 */
@@ -627,6 +629,53 @@ export class RefineQueue {
     pool: ModelPool,
     o: RefineOptions,
   ): Promise<void> {
+    const outcome = await this.attemptViaPool(llm, pool, o, {
+      // 段精炼：输入取段尾（按裁剪策略），并把"重新入队等待退避"接回精炼队列
+      run: (ref, attempt) => this.runRefine(
+        llm, task, { provider: ref.provider, model: ref.model },
+        o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, attempt,
+      ),
+      budgetOf: () => task.attempts ?? 0,
+      noteRequeue: (next) => { task.attempts = next },
+      requeue: () => { this.queue.push(task); this.pump() },
+      onFail: (reason) => this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, reason),
+      logLabel: 'refine',
+    })
+    if (outcome.ok && outcome.text !== undefined) {
+      this.apply(task.sessionId, task.thinkId, task.segmentIndex, outcome.text, {
+        input: outcome.inputTokens ?? 0,
+        output: estimateTokens(outcome.text),
+      })
+    }
+  }
+
+  /**
+   * 模型池的**公共取用引擎**（段精炼与整体摘要共用，含任务看板翻译的同款语义）。
+   *
+   * 提供三件事，两种摘要都靠它（此前整体摘要漏接池子，仍走单模型路径）：
+   *  1. **轮转**：每轮 `pick()`，一个任务可能被不同模型处理；
+   *  2. **指数退避**：失败模型退避，其他模型顶上；全不可用时把任务放回队列等待；
+   *  3. **自动开关思考**：同一模型先不带 `reasoningEffort`，失败后带上再试。
+   *
+   * @param llm - llm 服务。
+   * @param pool - 当前模型池。
+   * @param o - 实时配置。
+   * @param opts - 任务相关的回调与预算读取。
+   * @returns 成功时的文本与输入 token；失败/已重排队时 `ok:false`。
+   */
+  private async attemptViaPool(
+    llm: LlmLike,
+    pool: ModelPool,
+    o: RefineOptions,
+    opts: {
+      run: (ref: ModelRef, attempt: number) => Promise<{ text: string; inputTokens: number }>
+      budgetOf: () => number
+      noteRequeue: (next: number) => void
+      requeue: () => void
+      onFail: (reason: string) => void
+      logLabel: string
+    },
+  ): Promise<{ ok: boolean; text?: string; inputTokens?: number }> {
     const maxAttempts = Math.max(1, Math.floor(o.poolMaxAttempts ?? DEFAULT_POOL_MAX_ATTEMPTS))
     // 跨"重新入队"的总轮数上限：模型退避时任务会放回队列等待，但**必须有界**——
     // 否则一个恒定失败的任务（如提示词本身有问题）会无限重投。
@@ -636,21 +685,22 @@ export class RefineQueue {
     let lastRef: ModelRef | undefined
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if ((task.attempts ?? 0) >= totalBudget) {
-        this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, lastReason || '精炼重试次数已达上限')
-        return
+      if (opts.budgetOf() >= totalBudget) {
+        opts.onFail(lastReason || '重试次数已达上限')
+        return { ok: false }
       }
       const ref = pool.pick()
       if (ref === undefined) {
         // 全部在退避/满载：把任务放回队列并安排一次唤醒（不在这里空转、不丢任务）
         const wait = Math.max(200, pool.nextWakeMs())
-        task.attempts = (task.attempts ?? 0) + 1
-        if (task.attempts > totalBudget) {
-          this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, '精炼模型池持续不可用（已放弃）')
-          return
+        const next = opts.budgetOf() + 1
+        opts.noteRequeue(next)
+        if (next > totalBudget) {
+          opts.onFail('模型池持续不可用（已放弃）')
+          return { ok: false }
         }
-        setTimeout(() => { this.queue.push(task); this.pump() }, wait)
-        return
+        setTimeout(() => opts.requeue(), wait)
+        return { ok: false }
       }
       lastRef = ref
       pool.acquire(ref)
@@ -658,64 +708,55 @@ export class RefineQueue {
       // 这样"没关思考导致预算被推理烧光"的模型能自己救回来，而不必用户手配。
       const tries = o.disableReasoning === true ? 2 : 1
       let timer: ReturnType<typeof setTimeout> | undefined
-      let succeeded = false
-      for (let variant = 0; variant < tries && !succeeded; variant++) {
-        const attempt = pool.attemptsOf(ref)
-        try {
-          const route: RefineRoute = { provider: ref.provider, model: ref.model }
-          const res = await Promise.race([
-            this.runRefine(llm, task, route, o.maxInputTokens ?? 1500, o.outputTokens ?? 1024, attempt),
-            new Promise<never>((_, reject) => {
-              timer = setTimeout(() => reject(new Error('refine timeout after ' + timeoutMs + 'ms')), timeoutMs)
-            }),
-          ])
-          if (res && res.text.length > 0) {
-            pool.succeeded(ref)
-            this.apply(task.sessionId, task.thinkId, task.segmentIndex, res.text, {
-              input: res.inputTokens,
-              output: estimateTokens(res.text),
-            })
-            succeeded = true
+      try {
+        for (let variant = 0; variant < tries; variant++) {
+          const modelAttempt = pool.attemptsOf(ref)
+          try {
+            const res = await Promise.race([
+              opts.run(ref, modelAttempt),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('timeout after ' + timeoutMs + 'ms')), timeoutMs)
+              }),
+            ])
+            if (res && res.text.length > 0) {
+              pool.succeeded(ref)
+              return { ok: true, text: res.text, inputTokens: res.inputTokens }
+            }
+          } catch (error) {
+            lastReason = error instanceof Error ? error.message : String(error)
+            pool.noteAttempt(ref) // 下次这个模型带 reasoningEffort 再试
+            if (variant === tries - 1) {
+              // 同一模型的第二次尝试不写失败统计：那是"自动开关"的一次拨动，
+              // 不是模型不可用（否则状态色会把可用模型误判成红）
+              const delay = pool.failed(ref)
+              // eslint-disable-next-line no-console
+              console.warn(
+                '[dsh-think-summary] ' + opts.logLabel + ' attempt failed, backing off:',
+                formatModelRef(ref), lastReason, '退避 ' + delay + 'ms',
+                '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
+              )
+            } else {
+              // eslint-disable-next-line no-console
+              console.warn('[dsh-think-summary] ' + opts.logLabel + ' 切换思考开关重试:', formatModelRef(ref), lastReason)
+            }
+          } finally {
+            if (timer !== undefined) { clearTimeout(timer); timer = undefined }
           }
-        } catch (error) {
-          lastReason = error instanceof Error ? error.message : String(error)
-          pool.noteAttempt(ref) // 下次这个模型带 reasoningEffort 再试
-          // 同一模型的第二次尝试不写失败统计（那是"自动开关"的一次拨动，不是模型不可用）
-          if (variant === tries - 1) {
-            const delay = pool.failed(ref)
-            // eslint-disable-next-line no-console
-            console.warn(
-              '[dsh-think-summary] refine attempt failed, backing off:',
-              formatModelRef(ref),
-              lastReason,
-              '退避 ' + delay + 'ms',
-              '（attempt ' + (attempt + 1) + '/' + maxAttempts + '）',
-            )
-          } else {
-            // eslint-disable-next-line no-console
-            console.warn(
-              '[dsh-think-summary] refine 切换思考开关重试:',
-              formatModelRef(ref),
-              lastReason,
-            )
-          }
-        } finally {
-          if (timer !== undefined) { clearTimeout(timer); timer = undefined }
         }
+      } finally {
+        pool.release(ref)
       }
-      pool.release(ref)
-      if (succeeded) return
     }
 
-    // 本轮尝试全失败：写回原因，并在退避到期后**有限次**重投（由 totalBudget 兜底）
+    // 本轮尝试全失败：写回原因，并在退避到期后**有限次**重投
     const where = lastRef === undefined ? '' : formatModelRef(lastRef) + ' '
-    const reason = lastReason !== '' ? lastReason : '精炼模型池暂无可用模型'
-    this.onFail?.(task.sessionId, task.thinkId, task.segmentIndex, where + reason)
-    task.attempts = (task.attempts ?? 0) + 1
+    const reason = lastReason !== '' ? lastReason : '模型池暂无可用模型'
+    opts.onFail(where + reason)
+    const next = opts.budgetOf() + 1
+    opts.noteRequeue(next)
     const wait = pool.nextWakeMs()
-    if (wait > 0 && task.attempts <= totalBudget) {
-      setTimeout(() => { this.queue.push(task); this.pump() }, wait)
-    }
+    if (wait > 0 && next <= totalBudget) setTimeout(() => opts.requeue(), wait)
+    return { ok: false }
   }
 
   private async runRefine(
@@ -796,15 +837,22 @@ export class RefineQueue {
     route: RefineRoute,
     maxInputTokens: number,
     outputTokens: number,
+    attempt = 0,
   ): Promise<{ text: string; inputTokens: number }> {
     const inputText = headTailTrim(task.text, maxInputTokens)
     const stream = await this.buildRequest(llm, route, outputTokens, this.getOptions().thinkPrompt ?? DEFAULT_THINK_PROMPT,
-      THINK_USER_TEMPLATE.replace('{text}', inputText))
+      THINK_USER_TEMPLATE.replace('{text}', inputText), attempt)
     const text = await readSummaryStream(stream, `${route.provider}/${route.model}`)
     return { text, inputTokens: estimateTokens(inputText) }
   }
 
-  /** 整体摘要任务：路由解析 + 超时 + 错误隔离（与段精炼同口径）。 */
+  /**
+   * 整体摘要任务：**与段精炼同一条池子路径**（轮转 / 每模型并发 / 退避 / 自动开关思考），
+   * 池子为空时才回退单模型解析。
+   *
+   * 此前这里直接 `resolveRefineRoute` 走单模型，导致第二遍摘要绕过了池子：
+   * 池子里的模型限流时整体摘要会失败，且它也不参与状态色统计。
+   */
   private async runThink(task: ThinkTask): Promise<void> {
     const o = this.getOptions()
     const llm = this.getLlm()
@@ -818,6 +866,30 @@ export class RefineQueue {
       fallbackModel: task.fallbackModel,
     }
     try {
+      // 池子模式：整体摘要也走轮转 + 退避 + 换模型重试
+      const pool = this.pools?.current()
+      if (pool !== undefined && pool.size > 0) {
+        const outcome = await this.attemptViaPool(llm, pool, o, {
+          run: (ref, attempt) => this.runThinkRefine(
+            llm, routeTask, { provider: ref.provider, model: ref.model },
+            o.maxInputTokens ?? 800, o.outputTokens ?? 512, attempt,
+          ),
+          budgetOf: () => task.attempts ?? 0,
+          noteRequeue: (next) => { task.attempts = next },
+          requeue: () => { this.thinkQueue.push(task); this.pump() },
+          onFail: (reason) => this.onThinkFail?.(task.sessionId, task.thinkId, reason),
+          logLabel: 'think',
+        })
+        if (outcome.ok && outcome.text !== undefined) {
+          this.applyThink?.(task.sessionId, task.thinkId, outcome.text, {
+            input: outcome.inputTokens ?? 0,
+            output: estimateTokens(outcome.text),
+          })
+        }
+        return
+      }
+
+      // 单模型路径（池子未配置）
       const { route, error } = await resolveRefineRoute(llm, { provider: o.provider, model: o.model }, routeTask)
       if (error) {
         // eslint-disable-next-line no-console
