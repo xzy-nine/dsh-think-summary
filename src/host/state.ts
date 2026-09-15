@@ -93,6 +93,8 @@ export class ThinkStateStore {
   private lastActiveSessionId: string | undefined
   /** 状态变更监听（持久化写盘用）。 */
   private listeners = new Set<() => void>()
+  /** think 结束监听（整体摘要的触发点：思维链真正结束才跑一次）。 */
+  private endListeners = new Set<(sessionId: string, thinkId: string) => void>()
 
   /**
    * 全局暂停（客户端标题栏"暂停"按钮，非设置项）：
@@ -110,6 +112,20 @@ export class ThinkStateStore {
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /**
+   * 订阅"思维链结束"（`endThink`）：**整体摘要的唯一触发点**。
+   *
+   * 为什么必须以此为准：段的精炼结果是陆续产出的，若每段都触发整体摘要，
+   * 一次 N 段的思考就会打 N 次整体摘要（"总总结次数 = 段数"）。
+   * 思维链结束时一次性汇总，全程只打一次。
+   * @param listener - 收到 (sessionId, thinkId)。
+   * @returns 取消订阅函数。
+   */
+  onThinkEnd(listener: (sessionId: string, thinkId: string) => void): () => void {
+    this.endListeners.add(listener)
+    return () => this.endListeners.delete(listener)
   }
 
   private notify(): void {
@@ -165,15 +181,32 @@ export class ThinkStateStore {
     return { state: s, think }
   }
 
-  /** 流结束：结束指定 think 并刷新会话活跃态。 */
+  /**
+   * 流结束：结束指定 think 并刷新会话活跃态。
+   *
+   * 同时通知 {@link onThinkEnd} 订阅者——这是**整体摘要的唯一触发点**
+   * （幂等：重复调用时只对"确实是活跃→结束"的那次通知，避免 flush 与 finish
+   * 双路径重复触发整体摘要）。
+   */
   endThink(sessionId: string, thinkId: string): void {
     const s = this.get(sessionId)
     if (!s) return
     const think = s.thinks.find((t) => t.id === thinkId)
+    const wasActive = think?.active === true
     if (think) think.active = false
     s.active = s.thinks.some((t) => t.active)
     s.updatedAt = Date.now()
     this.notify()
+    // 只在"由活跃转为结束"时通知一次（finish 与 finally 双调用不会重复触发）
+    if (think !== undefined && wasActive) {
+      for (const l of this.endListeners) {
+        try {
+          l(sessionId, thinkId)
+        } catch {
+          /* 整体摘要的触发失败绝不影响思考链收尾 */
+        }
+      }
+    }
   }
 
   /** 推入一个分段到指定 think。 */

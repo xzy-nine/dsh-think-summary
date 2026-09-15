@@ -401,3 +401,27 @@ nvidia/openai/gpt-oss-20b      不带 effort: 15.9s    带 effort=none: 0.9s
 
 这样低效模型仍会被用到（不至于饿死），但调用频率被压下来，把机会让给高成功率模型。
 冷却与退避相互独立：`pick()` 要求两者都到期；`nextWakeMs()` 取二者较大值安排唤醒。
+
+### 8.13 整体摘要改在「思维链结束」时汇总一次
+
+原实现是**每段精炼成功就触发整体摘要**（`index.ts` 的精炼回调里调 `scheduleThink`），
+只靠 `THINK_DEBOUNCE_MS = 1200` 防抖。但段与段的间隔通常远超 1.2s，防抖形同虚设——
+一次 N 段的思考会打 **N 次**整体摘要，等于"总总结次数 = 段数"（用户明确否掉）。
+
+修法：把触发点换成**思维链真正结束**这一权威信号：
+
+- `stream.ts` 在 `finish`（及 `finally` 兜底）时调 `store.endThink()`；
+- `endThink` 只在**由活跃转为结束**时通知 `onThinkEnd` 订阅者一次
+  （幂等：finish 与 finally 双调用不会重复触发整体摘要）；
+- `index.ts` 订阅它 → `scheduleThink()`，全程**只汇总一次**。
+
+两个配套细节：
+
+1. **等最后几段精炼落定**：思维链结束时最后一段可能还在精炼。新增
+   `RefineQueue.hasPendingFor(sessionId, thinkId)`，若仍有在途任务则延迟重试
+   （700ms × 最多 6 次），避免用"启发式摘要"顶替刚精炼好的结果。
+2. **`thinkDone` 一次性守卫**：兜底路径的 think 生来 `active = false`（没有结束事件），
+   仍在精炼回调里触发；守卫保证它同样只汇总一次。
+
+**测试要点**：`endThink` 幂等（双调用只通知一次）、未知会话不通知、
+订阅者抛错不影响收尾、`hasPendingFor` 的在途语义。

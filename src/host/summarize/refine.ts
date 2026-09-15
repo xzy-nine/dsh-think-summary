@@ -437,6 +437,8 @@ export class RefineQueue {
    * 只有共用，两者才会真正互相轮转、并共享退避状态）。
    */
   private pools: ModelPoolManager | undefined
+  /** 正在执行的段精炼任务（用于 hasPendingFor：整体摘要要等它们落定）。 */
+  private runningTasks: RefineTask[] = []
 
   constructor(
     getOptions: () => RefineOptions,
@@ -511,6 +513,20 @@ export class RefineQueue {
   }
 
   /**
+   * 该 think 是否还有在途的段精炼（排队中或正在跑）。
+   *
+   * 用途：思维链结束时最后几段可能还在精炼，整体摘要要等它们落定再汇总，
+   * 否则会漏掉最后一段的精炼结果（只能用启发式摘要顶替）。
+   * @param sessionId - 会话 id。
+   * @param thinkId - think id。
+   * @returns 是否还有未完成的段精炼。
+   */
+  hasPendingFor(sessionId: string, thinkId: string): boolean {
+    return this.queue.some((t) => t.sessionId === sessionId && t.thinkId === thinkId)
+      || this.runningTasks.some((t) => t.sessionId === sessionId && t.thinkId === thinkId)
+  }
+
+  /**
    * 并发水位：有空位就取出任务并行执行；任务结束让出空位并补位。
    *
    * 池子模式下的容量 = **模型数 × 每模型并发**：并发不再"对着一个模型压"，
@@ -523,8 +539,11 @@ export class RefineQueue {
       const task = this.queue.shift()
       if (!task) break
       this.running++
+      this.runningTasks.push(task)
       void this.runOne(task).finally(() => {
         this.running = Math.max(0, this.running - 1)
+        const i = this.runningTasks.indexOf(task)
+        if (i >= 0) this.runningTasks.splice(i, 1)
         this.pump()
       })
     }
@@ -548,7 +567,6 @@ export class RefineQueue {
     }
     return Math.max(1, o.refineConcurrency ?? 3)
   }
-
   get pending(): number {
     return this.queue.length
   }

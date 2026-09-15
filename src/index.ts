@@ -138,8 +138,11 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
         seg.refineTokens = refineTokens
         s.updatedAt = Date.now()
       }
-      // 段摘要变了 → 触发第二遍（整体摘要）。防抖由队列负责，长思考只打一次。
-      if (think && s) scheduleThink(sessionId, thinkId)
+      // 实时路径的 think（active=true）不在这里触发——等思维链真正结束
+      // （store.endThink → onThinkEnd）汇总一次，否则一次 N 段思考会打 N 次整体摘要。
+      // 兜底路径的 think 生来 active=false（事后补跑，没有"结束"事件），
+      // 在这里触发；once 守卫保证它也只汇总一次。
+      if (think && think.active !== true) scheduleThink(sessionId, thinkId)
     },
     // 精炼失败/超时：把原因写回段（UI 显示"未精炼原因"）
     (sessionId, thinkId, segmentIndex, reason) => {
@@ -162,15 +165,43 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
   )
 
   /**
-   * 触发第二遍（整体摘要）：把该 think 当前的分段摘要再喂一次模型。
-   * 声明在队列之后、只在回调里调用（回调晚于构造执行）。
+   * 触发第二遍（整体摘要）：把该 think 的分段摘要再喂一次模型，得到一句整体动向。
    *
-   * **只有 ≥2 段才跑**：只有一段时，整体摘要几乎是那段摘要的复述，纯浪费一次调用
-   * （用户要求）。单段的卡片头部直接用那一段的摘要即可（UI 侧同样不再显示"生成中…"）。
+   * **只在思维链结束后触发一次**（订阅 `store.onThinkEnd`），而不是每段精炼后触发——
+   * 否则一次 N 段的思考会打 N 次整体摘要，等于"总总结次数 = 段数"（用户明确否掉）。
+   *
+   * 结束时刻的问题：最后一段的精炼可能还在途（思维链刚结束、精炼尚未回来）。
+   * 此时若立刻汇总，会漏掉最后一段的精炼结果。所以：
+   *  - 还有在途精炼 → 延迟重试几次，等它们落定；
+   *  - 重试上限内仍未落定 → 用当前已有的段摘要汇总（宁可少一段，也不无限等）。
+   *
+   * **只有 ≥2 段才跑**：单段时整体摘要几乎是那段摘要的复述，纯浪费一次调用。
    */
-  const scheduleThink = (sessionId: string, thinkId: string): void => {
+  const THINK_WAIT_MS = 700
+  const THINK_WAIT_TRIES = 6
+  /**
+   * 已经汇总过的 think（键 `sessionId\0thinkId`）。
+   *
+   * 兜底路径的段精炼是逐个回调的，每次都会走到 scheduleThink；没有这个守卫
+   * 就会打 N 次整体摘要——这正是要修的问题。实时路径靠 `onThinkEnd`
+   * 的"活跃→结束"只触发一次，这里再加一层保险。
+   */
+  const thinkDone = new Set<string>()
+  const scheduleThink = (sessionId: string, thinkId: string, tries = 0): void => {
+    const key = sessionId + '\u0000' + thinkId
+    if (thinkDone.has(key)) return // 已汇总过：绝不重复
     const think = store.get(sessionId)?.thinks.find((t) => t.id === thinkId)
-    if (!think || think.segments.length < 2) return
+    if (!think) return
+    if (think.segments.length < 2) return // 单段：不跑第二遍
+    // 还有该 think 的在途段精炼 → 稍后重试，等最后几段落定
+    if (refine.hasPendingFor(sessionId, thinkId) && tries < THINK_WAIT_TRIES) {
+      const t = setTimeout(() => scheduleThink(sessionId, thinkId, tries + 1), THINK_WAIT_MS)
+      // 不阻止进程退出（dsh 被关闭时这个等待无意义）
+      if (typeof t === 'object' && t !== null && 'unref' in t) (t as { unref?: () => void }).unref?.()
+      return
+    }
+    // 落定后才标记"已汇总"（等待期间的重入由 thinkDone 之前的重试逻辑处理）
+    thinkDone.add(key)
     const fallback = defaultModelOf()
     refine.enqueueThink({
       sessionId,
@@ -181,6 +212,9 @@ export function apply(ctx: CtxLike, config: ThinkSummaryConfig = {}) {
       segments: think.segments.map((x) => x.summary),
     })
   }
+
+  // 思维链结束 → 打一次整体摘要（唯一触发点）
+  store.onThinkEnd((sessionId, thinkId) => { scheduleThink(sessionId, thinkId) })
 
   // 兜底路径精炼、视图页「再试」、整体摘要用的默认模型（实时请求的 provider 在这几处不可得）
   const defaultModelOf = () => {

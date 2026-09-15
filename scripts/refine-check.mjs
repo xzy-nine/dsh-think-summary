@@ -643,5 +643,50 @@ check('配置关闭 → 任何结论都不带',
   rmSync(dir2, { recursive: true, force: true })
 }
 
+// ── 15. 整体摘要的触发时机：思维链结束时一次，而不是每段一次 ────────────────
+// 这是被用户明确否掉的 bug："总总结次数 = 段总结次数"。
+{
+  const { ThinkStateStore } = await import('../lib/host/state.js')
+  const store = new ThinkStateStore()
+
+  // endThink 只在"活跃 → 结束"时通知一次（finish 与 finally 双调用不重复）
+  const fired = []
+  store.onThinkEnd((sid, tid) => fired.push(sid + '/' + tid))
+  const { think } = store.beginThink('sess')
+  store.endThink('sess', think.id)
+  store.endThink('sess', think.id) // 双调用（stream.ts 的 finish + finally）
+  check('endThink 幂等：重复调用只通知一次整体摘要', fired, ['sess/' + think.id])
+
+  const before = fired.length
+  store.endThink('nope', 'x')
+  check('endThink 对未知会话不通知', fired.length, before)
+
+  // 监听器抛错绝不影响思考链收尾
+  store.onThinkEnd(() => { throw new Error('boom') })
+  let threw = false
+  try { store.endThink('sess2', 'x') } catch { threw = true }
+  check('整体摘要订阅者抛错不影响收尾', threw, false)
+}
+
+// hasPendingFor：整体摘要要等该 think 的在途段精炼落定
+{
+  const results = []
+  const q = new RefineQueue(
+    () => ({ enabled: true, provider: 'ollma', model: 'qwen3.5:4b' }),
+    () => replay([
+      { type: 'text-delta', text: '这是一段摘要' },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]),
+    () => results.push({ kind: 'applied' }),
+    () => results.push({ kind: 'failed' }),
+  )
+  check('无任务时 hasPendingFor 为 false', q.hasPendingFor('s', 't'), false)
+  q.enqueue({ sessionId: 's', thinkId: 't', segmentIndex: 0, text: 'x'.repeat(400), provider: 'p', fallbackModel: 'm' })
+  check('刚入队即视为在途（整体摘要要等它）', q.hasPendingFor('s', 't'), true)
+  check('其他 think 不受影响', q.hasPendingFor('s', 'other'), false)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  check('完成后不再是在途', q.hasPendingFor('s', 't'), false)
+}
+
 console.log(failures === 0 ? '\n[dsh-think-summary] refine-check: all passed' : `\n[dsh-think-summary] refine-check: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
