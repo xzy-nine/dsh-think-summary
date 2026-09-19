@@ -126,6 +126,8 @@ const PANEL_CSS = `
 .ts-set-headText{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
 .ts-set-name{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4}
 .ts-set-desc{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5}
+/* 插件管理页的一行说明（summary 视图）：页面自己画标题，这里只给正文。 */
+.ts-set-summary{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5}
 .ts-set-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s}
 .ts-set-card[data-open="true"] .ts-set-chevron{transform:rotate(180deg)}
 .ts-set-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}

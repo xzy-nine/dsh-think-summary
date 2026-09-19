@@ -191,9 +191,20 @@ function createBridgeScope() {
   }
 }
 
-/** 设置卡片：默认折叠，点头部展开；对齐原生 PluginCard + ValueField 布局。 */
-function makeSettingsCard(scope) {
-  return function SettingsCard() {
+/** 设置卡片：对齐原生插件配置页布局。
+ *
+ * 0.1.6 起配置表面从设置页迁到「插件」页：`settings.plugin.item`（keyed）
+ * 退役，改为 `plugins.item`（list，以 id/label/order 声明），且宿主对该条目
+ * 渲染两种视图（owner props 的 `view`）：
+ *  - `summary` = 标题下的一行说明（页面自己画标题、图标与面包屑）
+ *  - `page`    = 真正的表单
+ * 所以组件必须按 `view` 分支，且 page 模式不再自带折叠头（标题由页面提供）。
+ * 两个槽位都注册：未声明的槽位 inject 静默不触发，因此旧宿主只认前者、
+ * 新宿主只认后者，互不干扰。
+ */
+function makeSettingsCard(scope, legacy) {
+  return function SettingsCard(props) {
+    const view = props && props.view === 'summary' ? 'summary' : 'page'
     const [snap, setSnap] = React.useState(null)
     const [draft, setDraft] = React.useState({})
     const [busy, setBusy] = React.useState(false)
@@ -216,6 +227,8 @@ function makeSettingsCard(scope) {
 
     // 加载精炼供应商/模型下拉数据（/models 路由：providers + 各自的模型目录）
     React.useEffect(() => {
+      // summary 视图只是插件列表里的一行文字：不拉目录、不拉统计。
+      if (view === 'summary') return undefined
       let alive = true
       const load = async () => {
         try {
@@ -233,11 +246,12 @@ function makeSettingsCard(scope) {
       }
       void load()
       return () => { alive = false }
-    }, [])
+    }, [view])
 
     // 加载模型池统计（状态色）。打开设置卡时取一次 + 每 10s 刷新：
     // 精炼是后台持续跑的，停留在这个页面时也能看到颜色变化。
     React.useEffect(() => {
+      if (view === 'summary') return undefined
       let alive = true
       let timer = null
       const poll = async () => {
@@ -258,14 +272,15 @@ function makeSettingsCard(scope) {
         alive = false
         if (timer !== null) clearTimeout(timer)
       }
-    }, [])
+    }, [view])
 
     React.useEffect(() => {
+      if (view === 'summary') return undefined
       const sync = () => setSnap(scope.getSnapshot())
       sync()
       const un = scope.subscribe(sync)
       return () => { if (typeof un === 'function') un() }
-    }, [])
+    }, [view])
 
     React.useEffect(() => {
       if (snap && snap.status === 'ready' && !busy) {
@@ -292,6 +307,11 @@ function makeSettingsCard(scope) {
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [snap, busy, seed])
+
+    // 插件管理页只索取一行说明：不渲染整套表单（也不触发它的下拉/统计拉取）。
+    if (view === 'summary') {
+      return React.createElement('span', { className: 'ts-set-summary' }, '长思考链分段总结 · 改动即时生效')
+    }
 
     if (!snap || snap.status === 'loading') return null
 
@@ -641,6 +661,30 @@ function makeSettingsCard(scope) {
       )
     })
 
+    // 页面已经画好标题与面包屑，表单本体不再自带折叠头；旧槽位（设置页卡片）
+    // 仍由用户点击展开（旧宿主不传 view）。
+    const deferToHeader = legacy === true && (props === undefined || props.view === undefined)
+    const body = React.createElement(
+      'div', { className: 'ts-set-body' },
+      masterField,
+      ...groups,
+      React.createElement(
+        'div', { className: 'ts-set-footer' },
+        msg
+          ? React.createElement('p', { className: 'ts-set-msg', 'data-kind': msgKind }, msg)
+          : (snap.writable === false
+              ? React.createElement('p', { className: 'ts-set-msg' }, '（Host 文档只读）')
+              : React.createElement('p', { className: 'ts-set-msg' }, '')),
+        React.createElement('button', { type: 'button', className: 'ts-set-discard', disabled: busy, onClick: () => void resetAll() }, '恢复默认'),
+        React.createElement('button', { type: 'button', className: 'ts-set-save', disabled: busy, onClick: () => void save() }, '保存'),
+      ),
+    )
+
+    // 新槽位：宿主页面提供标题，直接渲染表单。
+    if (!deferToHeader) {
+      return React.createElement('div', { className: 'ts-set-card', 'data-open': 'true' }, body)
+    }
+
     return React.createElement(
       'div', { className: 'ts-set-card', 'data-open': open ? 'true' : 'false' },
       React.createElement(
@@ -657,23 +701,7 @@ function makeSettingsCard(scope) {
         ),
         chevronEl('ts-set-chevron'),
       ),
-      open
-        ? React.createElement(
-            'div', { className: 'ts-set-body' },
-            masterField,
-            ...groups,
-            React.createElement(
-              'div', { className: 'ts-set-footer' },
-              msg
-                ? React.createElement('p', { className: 'ts-set-msg', 'data-kind': msgKind }, msg)
-                : (snap.writable === false
-                    ? React.createElement('p', { className: 'ts-set-msg' }, '（Host 文档只读）')
-                    : React.createElement('p', { className: 'ts-set-msg' }, '')),
-              React.createElement('button', { type: 'button', className: 'ts-set-discard', disabled: busy, onClick: () => void resetAll() }, '恢复默认'),
-              React.createElement('button', { type: 'button', className: 'ts-set-save', disabled: busy, onClick: () => void save() }, '保存'),
-            ),
-          )
-        : null,
+      open ? body : null,
     )
   }
 }

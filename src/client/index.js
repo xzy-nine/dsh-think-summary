@@ -25,13 +25,22 @@ export function apply(ctx) {
   }
 
   step('settings card', () => {
-    // 1) 设置卡片（官方插件配置区，直连自建设置桥）。
-    //    rc.7 起 settings.plugin.item 是 keyed 槽位：注册必须传 key（= 设置命名空间），
-    //    旧的 id/order/label 写法会在声明时抛 keyed slot requires options.key。
+    // 1) 配置页（0.1.6 起）。两个时代各注册一次，互不干扰：未声明的槽位
+    //    inject 静默等待、从不回调。
+    //    - 0.1.6+：`plugins.bundle.config`（keyed，key = 本包名）。它渲染在本
+    //      bundle 自己的详情页里（侧栏「插件」→ 已安装 → 本包），只索取
+    //      `view: 'page'`，标题/面包屑由页面画。这是官方给第三方 bundle 的
+    //      配置位，不会混进「官方」分组 —— 与 `plugins.item`（官方 4 个内置页
+    //      在用的通用位）不同。
+    //    - ≤0.1.5：设置页的 `settings.plugin.item`（keyed，key = 设置命名空间）。
     const scope = createBridgeScope()
+    ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register(
+      { name: 'plugins.bundle.config', key: name },
+      makeSettingsCard(scope),
+    ))
     ctx.slots.inject('settings.plugin.item', () => ctx.slots.register(
       { name: 'settings.plugin.item', key: 'think-summary' },
-      makeSettingsCard(scope),
+      makeSettingsCard(scope, true),
     ))
   })
   step('step card', () => {
